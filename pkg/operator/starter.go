@@ -190,6 +190,9 @@ var RevisionSecrets = []revision.RevisionResource{
 	// this is needed so that the cert syncer itself can request certs.  It uses localhost
 	{Name: "kube-apiserver-cert-syncer-client-cert-key"},
 	{Name: "kubelet-client"},
+
+	// etcd encryption
+	{Name: "encryption-config", Optional: true},
 }
 
 var CertConfigMaps = []revision.RevisionResource{
