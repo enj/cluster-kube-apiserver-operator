@@ -1,12 +1,10 @@
 package encryption
 
 import (
-	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	apiserverconfigv1 "k8s.io/apiserver/pkg/apis/config/v1"
 	corev1listers "k8s.io/client-go/listers/core/v1"
 
 	"github.com/openshift/library-go/pkg/operator/configobserver"
@@ -69,24 +67,4 @@ func NewEncryptionObserver(targetNamespace string, encryptionConfigPath []string
 
 		return observedConfig, errs
 	}
-}
-
-func getEncryptionConfiguration() (*corev1.Secret, error) {
-	ec := apiserverconfigv1.EncryptionConfiguration{
-		Resources: []apiserverconfigv1.ResourceConfiguration{
-			{
-				Resources: []string{},
-				Providers: []apiserverconfigv1.ProviderConfiguration{
-					{
-						AESCBC: &apiserverconfigv1.AESConfiguration{
-							Keys: nil,
-						},
-						Identity: &apiserverconfigv1.IdentityConfiguration{},
-					},
-				},
-			},
-		},
-	}
-	_ = ec
-	return nil, nil
 }
