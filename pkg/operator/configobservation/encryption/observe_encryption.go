@@ -44,7 +44,10 @@ func NewEncryptionObserver(targetNamespace string, encryptionConfigPath []string
 		encryptionConfigSecret, err := listers.SecretLister().Secrets(targetNamespace).Get(encryptionConfSecret)
 		if errors.IsNotFound(err) {
 			recorder.Warningf("ObserveEncryptionConfigNotFound", "encryption config secret %s/%s not found", targetNamespace, encryptionConfSecret)
-			return observedConfig, errs
+			// TODO what is the best thing to do here?
+			// for now we do not unset the config as we are checking a synced version of the secret that could be deleted
+			// return observedConfig, errs
+			return previouslyObservedConfig, append(errs, err)
 		}
 		if err != nil {
 			recorder.Warningf("ObserveEncryptionConfigGetErr", "failed to get encryption config secret %s/%s: %v", targetNamespace, encryptionConfSecret, err)
