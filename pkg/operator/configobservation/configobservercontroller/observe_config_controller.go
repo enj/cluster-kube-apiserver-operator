@@ -88,7 +88,6 @@ func NewConfigObserver(
 			apiserver.ObserveUserClientCABundle,
 			auth.ObserveAuthMetadata,
 			encryption.NewEncryptionObserver(
-				operatorclient.OperatorNamespace,
 				operatorclient.TargetNamespace,
 				[]string{"apiServerArguments", "encryption-provider-config"},
 				schema.GroupResource{Group: "", Resource: "secrets"},
