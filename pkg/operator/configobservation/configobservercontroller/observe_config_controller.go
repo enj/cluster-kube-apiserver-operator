@@ -1,7 +1,6 @@
 package configobservercontroller
 
 import (
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/tools/cache"
 
 	configinformers "github.com/openshift/client-go/config/informers/externalversions"
@@ -90,8 +89,6 @@ func NewConfigObserver(
 			encryption.NewEncryptionObserver(
 				operatorclient.TargetNamespace,
 				[]string{"apiServerArguments", "encryption-provider-config"},
-				schema.GroupResource{Group: "", Resource: "secrets"},
-				schema.GroupResource{Group: "", Resource: "configmaps"},
 			),
 			etcd.ObserveStorageURLs,
 			cloudprovider.NewCloudProviderObserver(

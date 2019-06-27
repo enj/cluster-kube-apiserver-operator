@@ -4,7 +4,6 @@ import (
 	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	corev1listers "k8s.io/client-go/listers/core/v1"
 
 	"github.com/openshift/library-go/pkg/operator/configobserver"
@@ -20,7 +19,7 @@ type SecretLister interface {
 	SecretLister() corev1listers.SecretLister
 }
 
-func NewEncryptionObserver(targetNamespace string, encryptionConfigPath []string, resources ...schema.GroupResource) configobserver.ObserveConfigFunc {
+func NewEncryptionObserver(targetNamespace string, encryptionConfigPath []string) configobserver.ObserveConfigFunc {
 	return func(genericListers configobserver.Listers, recorder events.Recorder, existingConfig map[string]interface{}) (map[string]interface{}, []error) {
 		listers := genericListers.(SecretLister)
 		var errs []error

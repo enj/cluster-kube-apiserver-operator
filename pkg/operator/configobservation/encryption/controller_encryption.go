@@ -1,14 +1,22 @@
 package encryption
 
 import (
+	"encoding/base64"
 	"fmt"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/errors"
+	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/runtime/serializer"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
 	apiserverconfigv1 "k8s.io/apiserver/pkg/apis/config/v1"
 	"k8s.io/client-go/kubernetes"
+	corev1client "k8s.io/client-go/kubernetes/typed/core/v1"
+	corev1listers "k8s.io/client-go/listers/core/v1"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/workqueue"
 	"k8s.io/klog"
@@ -20,7 +28,24 @@ import (
 	operatorv1helpers "github.com/openshift/library-go/pkg/operator/v1helpers"
 )
 
-const workKey = "key"
+const (
+	workKey = "key"
+
+	currAnnotation = "state.operator.openshift.io/current"
+	nextAnnotation = "state.operator.openshift.io/next"
+	prevAnnotation = "state.operator.openshift.io/prev"
+
+	identityConfig = "-1"
+)
+
+var encoder runtime.Encoder
+
+func init() {
+	scheme := runtime.NewScheme()
+	codecs := serializer.NewCodecFactory(scheme)
+	utilruntime.Must(apiserverconfigv1.AddToScheme(scheme))
+	encoder = codecs.LegacyCodec(apiserverconfigv1.SchemeGroupVersion)
+}
 
 type EncryptionController struct {
 	operatorClient operatorv1helpers.StaticPodOperatorClient
@@ -31,6 +56,10 @@ type EncryptionController struct {
 	preRunCachesSynced []cache.InformerSynced
 
 	sourceName string
+	resources  []string
+
+	secretLister corev1listers.SecretNamespaceLister
+	secretClient corev1client.SecretInterface
 }
 
 func NewEncryptionController(
@@ -40,6 +69,7 @@ func NewEncryptionController(
 	operatorConfigClient operatorv1client.KubeAPIServersGetter,
 	kubeClient kubernetes.Interface,
 	eventRecorder events.Recorder,
+	resources ...schema.GroupResource,
 ) *EncryptionController {
 	c := &EncryptionController{
 		operatorClient: operatorClient,
@@ -59,6 +89,14 @@ func NewEncryptionController(
 	operatorClient.Informer().AddEventHandler(c.eventHandler())
 	kubeInformersForNamespaces.InformersFor(operatorclient.GlobalMachineSpecifiedConfigNamespace).Core().V1().Secrets().Informer().AddEventHandler(c.eventHandler())
 	kubeInformersForNamespaces.InformersFor(targetNamespace).Core().V1().Secrets().Informer().AddEventHandler(c.eventHandler())
+
+	c.secretLister = kubeInformersForNamespaces.InformersFor(operatorclient.GlobalMachineSpecifiedConfigNamespace).
+		Core().V1().Secrets().Lister().Secrets(operatorclient.GlobalMachineSpecifiedConfigNamespace)
+	c.secretClient = kubeClient.CoreV1().Secrets(operatorclient.GlobalMachineSpecifiedConfigNamespace)
+
+	for _, resource := range resources {
+		c.resources = append(c.resources, resource.String())
+	}
 
 	return c
 }
@@ -81,15 +119,7 @@ func (c *EncryptionController) sync() error {
 		return nil
 	}
 
-	// do not mess with it when its doing stuff
-	if !isStaticPodReady(c.operatorClient) {
-		c.queue.AddAfter(workKey, 5*time.Second)
-		return nil
-	}
-
-	var errs []error
-	// TODO stuff here
-	configError := operatorv1helpers.NewMultiLineAggregate(errs)
+	configError := c.handleEncryptionConfig()
 
 	// update failing condition
 	cond := operatorv1.OperatorCondition{
@@ -106,6 +136,83 @@ func (c *EncryptionController) sync() error {
 	}
 
 	return configError
+}
+
+func (c *EncryptionController) handleEncryptionConfig() error {
+	secret, err := c.secretLister.Get(c.sourceName)
+	switch {
+	case err == nil:
+		return c.handleCurrentEncryptionConfig(secret)
+	case errors.IsNotFound(err):
+		return c.createNewEncryptionConfig()
+	default:
+		return err
+	}
+}
+
+func (c *EncryptionController) handleCurrentEncryptionConfig(secret *corev1.Secret) error {
+
+}
+
+func (c *EncryptionController) createNewEncryptionConfig() error {
+	key := []byte{}
+	_, err := c.secretClient.Create(&corev1.Secret{
+		ObjectMeta: v1.ObjectMeta{
+			Name: c.sourceName,
+			Annotations: map[string]string{
+				"kubernetes.io/description": "Cluster critical secret.  DO NOT touch.  Alterations will result in complete data loss.",
+
+				currAnnotation: identityConfig,
+				nextAnnotation: "0",
+				prevAnnotation: identityConfig,
+			},
+		},
+		Data: map[string][]byte{
+			"0":                  key,
+			encryptionConfSecret: nil,
+		},
+	})
+	return err
+}
+
+func (c *EncryptionController) getEncryptionConfigurationOrDie(currKey, prevKey, nextKey []byte) []byte {
+	encryptionConfig := &apiserverconfigv1.EncryptionConfiguration{
+		Resources: []apiserverconfigv1.ResourceConfiguration{
+			{
+				Resources: c.resources,
+				Providers: []apiserverconfigv1.ProviderConfiguration{
+					keyToConfig(currKey),
+					keyToConfig(nextKey),
+					keyToConfig(prevKey),
+				},
+			},
+		},
+	}
+
+	bytes, err := runtime.Encode(encoder, encryptionConfig)
+	if err != nil {
+		panic(err) // indicates static generated code is broken, unrecoverable
+	}
+
+	return bytes
+}
+
+func keyToConfig(key []byte) apiserverconfigv1.ProviderConfiguration {
+	if len(key) == 0 {
+		return apiserverconfigv1.ProviderConfiguration{
+			Identity: &apiserverconfigv1.IdentityConfiguration{},
+		}
+	}
+	return apiserverconfigv1.ProviderConfiguration{
+		AESCBC: &apiserverconfigv1.AESConfiguration{
+			Keys: []apiserverconfigv1.Key{
+				{
+					Name:   "??", // TODO fix
+					Secret: base64.StdEncoding.EncodeToString(key),
+				},
+			},
+		},
+	}
 }
 
 func (c *EncryptionController) Run(stopCh <-chan struct{}) {
@@ -155,43 +262,4 @@ func (c *EncryptionController) eventHandler() cache.ResourceEventHandler {
 		UpdateFunc: func(old, new interface{}) { c.queue.Add(workKey) },
 		DeleteFunc: func(obj interface{}) { c.queue.Add(workKey) },
 	}
-}
-
-func getEncryptionConfiguration() (*corev1.Secret, error) {
-	ec := apiserverconfigv1.EncryptionConfiguration{
-		Resources: []apiserverconfigv1.ResourceConfiguration{
-			{
-				Resources: []string{},
-				Providers: []apiserverconfigv1.ProviderConfiguration{
-					{
-						AESCBC: &apiserverconfigv1.AESConfiguration{
-							Keys: nil,
-						},
-						Identity: &apiserverconfigv1.IdentityConfiguration{},
-					},
-				},
-			},
-		},
-	}
-	_ = ec
-	return nil, nil
-}
-
-func isStaticPodReady(operatorClient operatorv1helpers.StaticPodOperatorClient) bool {
-	_, status, _, err := operatorClient.GetStaticPodOperatorStateWithQuorum()
-	if err != nil {
-		klog.Infof("failed to check operator state: %v", err)
-		return false
-	}
-
-	// TODO fix
-	if -1 != status.ObservedGeneration {
-		return false
-	}
-
-	if operatorv1helpers.IsOperatorConditionPresentAndEqual(status.Conditions, operatorv1.OperatorStatusTypeProgressing, operatorv1.ConditionTrue) {
-		return false
-	}
-
-	return operatorv1helpers.IsOperatorConditionPresentAndEqual(status.Conditions, operatorv1.OperatorStatusTypeAvailable, operatorv1.ConditionTrue)
 }
