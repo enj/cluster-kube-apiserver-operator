@@ -7,6 +7,7 @@ import (
 
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 
@@ -24,6 +25,7 @@ import (
 
 	"github.com/openshift/cluster-kube-apiserver-operator/pkg/operator/certrotationcontroller"
 	"github.com/openshift/cluster-kube-apiserver-operator/pkg/operator/configobservation/configobservercontroller"
+	"github.com/openshift/cluster-kube-apiserver-operator/pkg/operator/configobservation/encryption"
 	"github.com/openshift/cluster-kube-apiserver-operator/pkg/operator/operatorclient"
 	"github.com/openshift/cluster-kube-apiserver-operator/pkg/operator/resourcesynccontroller"
 	"github.com/openshift/cluster-kube-apiserver-operator/pkg/operator/targetconfigcontroller"
@@ -80,6 +82,18 @@ func RunOperator(ctx *controllercmd.ControllerContext) error {
 		configInformers,
 		resourceSyncController,
 		ctx.EventRecorder,
+	)
+
+	encryptionController := encryption.NewEncryptionController(
+		operatorclient.TargetNamespace,
+		"encryption-config-kube-apiserver",
+		operatorClient,
+		kubeInformersForNamespaces,
+		operatorConfigClient.OperatorV1(),
+		kubeClient,
+		ctx.EventRecorder,
+		schema.GroupResource{Group: "", Resource: "secrets"},
+		schema.GroupResource{Group: "", Resource: "configmaps"},
 	)
 
 	targetConfigReconciler := targetconfigcontroller.NewTargetConfigController(
@@ -159,6 +173,7 @@ func RunOperator(ctx *controllercmd.ControllerContext) error {
 	go resourceSyncController.Run(1, ctx.Done())
 	go targetConfigReconciler.Run(1, ctx.Done())
 	go configObserver.Run(1, ctx.Done())
+	go encryptionController.Run(ctx.Done())
 	go clusterOperatorStatus.Run(1, ctx.Done())
 	go certRotationController.Run(1, ctx.Done())
 
@@ -190,6 +205,9 @@ var RevisionSecrets = []revision.RevisionResource{
 	// this is needed so that the cert syncer itself can request certs.  It uses localhost
 	{Name: "kube-apiserver-cert-syncer-client-cert-key"},
 	{Name: "kubelet-client"},
+
+	// etcd encryption
+	{Name: "encryption-config", Optional: true},
 }
 
 var CertConfigMaps = []revision.RevisionResource{
