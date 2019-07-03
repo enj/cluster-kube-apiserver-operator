@@ -2,6 +2,8 @@ package v1
 
 import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	configv1 "github.com/openshift/api/config/v1"
 )
 
 // +genclient
@@ -25,6 +27,22 @@ type KubeAPIServerSpec struct {
 
 type KubeAPIServerStatus struct {
 	StaticPodOperatorStatus `json:",inline"`
+
+	EncryptionStatus EncryptionStatus `json:"encryptionStatus"`
+}
+
+type EncryptionStatus struct {
+	Resources []EncryptionResource `json:"resources"`
+}
+
+type EncryptionResource struct {
+	GroupResource metav1.GroupResource `json:"groupResource"`
+
+	CurrentWriteKey configv1.SecretNameReference `json:"currentWriteKey"`
+
+	NextWriteKey configv1.SecretNameReference `json:"nextWriteKey"`
+
+	ReadKey configv1.SecretNameReference `json:"readKey"`
 }
 
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object

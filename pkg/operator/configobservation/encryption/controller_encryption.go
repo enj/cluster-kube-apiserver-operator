@@ -1,19 +1,12 @@
 package encryption
 
 import (
-	"encoding/base64"
 	"fmt"
 	"time"
 
-	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/errors"
-	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/apimachinery/pkg/runtime/serializer"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
-	apiserverconfigv1 "k8s.io/apiserver/pkg/apis/config/v1"
 	"k8s.io/client-go/kubernetes"
 	corev1client "k8s.io/client-go/kubernetes/typed/core/v1"
 	corev1listers "k8s.io/client-go/listers/core/v1"
@@ -28,24 +21,7 @@ import (
 	operatorv1helpers "github.com/openshift/library-go/pkg/operator/v1helpers"
 )
 
-const (
-	workKey = "key"
-
-	currAnnotation = "state.operator.openshift.io/current"
-	nextAnnotation = "state.operator.openshift.io/next"
-	prevAnnotation = "state.operator.openshift.io/prev"
-
-	identityConfig = "-1"
-)
-
-var encoder runtime.Encoder
-
-func init() {
-	scheme := runtime.NewScheme()
-	codecs := serializer.NewCodecFactory(scheme)
-	utilruntime.Must(apiserverconfigv1.AddToScheme(scheme))
-	encoder = codecs.LegacyCodec(apiserverconfigv1.SchemeGroupVersion)
-}
+const workKey = "key"
 
 type EncryptionController struct {
 	operatorClient operatorv1helpers.StaticPodOperatorClient
@@ -139,80 +115,7 @@ func (c *EncryptionController) sync() error {
 }
 
 func (c *EncryptionController) handleEncryptionConfig() error {
-	secret, err := c.secretLister.Get(c.sourceName)
-	switch {
-	case err == nil:
-		return c.handleCurrentEncryptionConfig(secret)
-	case errors.IsNotFound(err):
-		return c.createNewEncryptionConfig()
-	default:
-		return err
-	}
-}
-
-func (c *EncryptionController) handleCurrentEncryptionConfig(secret *corev1.Secret) error {
-
-}
-
-func (c *EncryptionController) createNewEncryptionConfig() error {
-	key := []byte{}
-	_, err := c.secretClient.Create(&corev1.Secret{
-		ObjectMeta: v1.ObjectMeta{
-			Name: c.sourceName,
-			Annotations: map[string]string{
-				"kubernetes.io/description": "Cluster critical secret.  DO NOT touch.  Alterations will result in complete data loss.",
-
-				currAnnotation: identityConfig,
-				nextAnnotation: "0",
-				prevAnnotation: identityConfig,
-			},
-		},
-		Data: map[string][]byte{
-			"0":                  key,
-			encryptionConfSecret: nil,
-		},
-	})
-	return err
-}
-
-func (c *EncryptionController) getEncryptionConfigurationOrDie(currKey, prevKey, nextKey []byte) []byte {
-	encryptionConfig := &apiserverconfigv1.EncryptionConfiguration{
-		Resources: []apiserverconfigv1.ResourceConfiguration{
-			{
-				Resources: c.resources,
-				Providers: []apiserverconfigv1.ProviderConfiguration{
-					keyToConfig(currKey),
-					keyToConfig(nextKey),
-					keyToConfig(prevKey),
-				},
-			},
-		},
-	}
-
-	bytes, err := runtime.Encode(encoder, encryptionConfig)
-	if err != nil {
-		panic(err) // indicates static generated code is broken, unrecoverable
-	}
-
-	return bytes
-}
-
-func keyToConfig(key []byte) apiserverconfigv1.ProviderConfiguration {
-	if len(key) == 0 {
-		return apiserverconfigv1.ProviderConfiguration{
-			Identity: &apiserverconfigv1.IdentityConfiguration{},
-		}
-	}
-	return apiserverconfigv1.ProviderConfiguration{
-		AESCBC: &apiserverconfigv1.AESConfiguration{
-			Keys: []apiserverconfigv1.Key{
-				{
-					Name:   "??", // TODO fix
-					Secret: base64.StdEncoding.EncodeToString(key),
-				},
-			},
-		},
-	}
+	return nil // TODO
 }
 
 func (c *EncryptionController) Run(stopCh <-chan struct{}) {
