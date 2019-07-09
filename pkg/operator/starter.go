@@ -96,6 +96,15 @@ func RunOperator(ctx *controllercmd.ControllerContext) error {
 		schema.GroupResource{Group: "", Resource: "configmaps"},
 	)
 
+	encryptionStateController := encryption.NewEncryptionStateController(
+		operatorclient.TargetNamespace,
+		"encryption-config-kube-apiserver",
+		operatorClient,
+		kubeInformersForNamespaces,
+		kubeClient,
+		ctx.EventRecorder,
+	)
+
 	targetConfigReconciler := targetconfigcontroller.NewTargetConfigController(
 		os.Getenv("IMAGE"),
 		os.Getenv("OPERATOR_IMAGE"),
@@ -174,6 +183,7 @@ func RunOperator(ctx *controllercmd.ControllerContext) error {
 	go targetConfigReconciler.Run(1, ctx.Done())
 	go configObserver.Run(1, ctx.Done())
 	go encryptionController.Run(ctx.Done())
+	go encryptionStateController.Run(ctx.Done())
 	go clusterOperatorStatus.Run(1, ctx.Done())
 	go certRotationController.Run(1, ctx.Done())
 
