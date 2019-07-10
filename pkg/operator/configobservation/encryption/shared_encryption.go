@@ -45,8 +45,9 @@ func init() {
 
 type groupResourcesState map[schema.GroupResource]keys
 type keys struct {
-	writeKey apiserverconfigv1.Key
-	readKeys []apiserverconfigv1.Key
+	writeKey        apiserverconfigv1.Key
+	readKeys        []apiserverconfigv1.Key
+	migratedSecrets []string
 }
 
 func getEncryptionState(encryptionSecrets []*corev1.Secret) groupResourcesState {
@@ -71,6 +72,7 @@ func getEncryptionState(encryptionSecrets []*corev1.Secret) groupResourcesState 
 		// keep overwriting the write key with the latest key that has been migrated to
 		if len(encryptionSecret.Annotations[encryptionSecretMigrationTimestamp]) > 0 {
 			grState.writeKey = key
+			grState.migratedSecrets = append(grState.migratedSecrets, encryptionSecret.Name)
 		}
 
 		encryptionState[gr] = grState
