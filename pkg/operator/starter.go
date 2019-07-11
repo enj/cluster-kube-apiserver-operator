@@ -113,6 +113,14 @@ func RunOperator(ctx *controllercmd.ControllerContext) error {
 		ctx.EventRecorder,
 	)
 
+	encryptionMigrationController := encryption.NewEncryptionMigrationController(
+		operatorclient.TargetNamespace,
+		operatorClient,
+		kubeInformersForNamespaces,
+		kubeClient,
+		ctx.EventRecorder,
+	)
+
 	targetConfigReconciler := targetconfigcontroller.NewTargetConfigController(
 		os.Getenv("IMAGE"),
 		os.Getenv("OPERATOR_IMAGE"),
@@ -193,6 +201,7 @@ func RunOperator(ctx *controllercmd.ControllerContext) error {
 	go encryptionController.Run(ctx.Done())
 	go encryptionStateController.Run(ctx.Done())
 	go encryptionPruneController.Run(ctx.Done())
+	go encryptionMigrationController.Run(ctx.Done())
 	go clusterOperatorStatus.Run(1, ctx.Done())
 	go certRotationController.Run(1, ctx.Done())
 

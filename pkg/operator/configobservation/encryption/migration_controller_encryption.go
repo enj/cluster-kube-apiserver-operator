@@ -4,10 +4,9 @@ import (
 	"fmt"
 	"time"
 
-	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
-	utilerrors "k8s.io/apimachinery/pkg/util/errors"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
@@ -24,34 +23,34 @@ import (
 	operatorv1helpers "github.com/openshift/library-go/pkg/operator/v1helpers"
 )
 
-const pruneWorkKey = "key"
+const migrationWorkKey = "key"
 
-type EncryptionPruneController struct {
+type EncryptionMigrationController struct {
 	operatorClient operatorv1helpers.StaticPodOperatorClient
 
 	queue         workqueue.RateLimitingInterface
-	eventRecorder events.Recorder // TODO this is currently not used
+	eventRecorder events.Recorder
 
 	preRunCachesSynced []cache.InformerSynced
 
 	componentSelector labels.Selector
 
 	secretLister corev1listers.SecretNamespaceLister
-	secretClient corev1client.SecretInterface
+	secretClient corev1client.SecretsGetter
 }
 
-func NewEncryptionPruneController(
+func NewEncryptionMigrationController(
 	targetNamespace string,
 	operatorClient operatorv1helpers.StaticPodOperatorClient,
 	kubeInformersForNamespaces operatorv1helpers.KubeInformersForNamespaces,
 	kubeClient kubernetes.Interface,
 	eventRecorder events.Recorder,
-) *EncryptionPruneController {
-	c := &EncryptionPruneController{
+) *EncryptionMigrationController {
+	c := &EncryptionMigrationController{
 		operatorClient: operatorClient,
-		eventRecorder:  eventRecorder.WithComponentSuffix("encryption-prune-controller"),
+		eventRecorder:  eventRecorder.WithComponentSuffix("encryption-migration-controller"),
 
-		queue: workqueue.NewNamedRateLimitingQueue(workqueue.DefaultControllerRateLimiter(), "EncryptionPruneController"),
+		queue: workqueue.NewNamedRateLimitingQueue(workqueue.DefaultControllerRateLimiter(), "EncryptionMigrationController"),
 
 		preRunCachesSynced: []cache.InformerSynced{
 			operatorClient.Informer().HasSynced,
@@ -74,13 +73,13 @@ func NewEncryptionPruneController(
 
 	c.secretLister = kubeInformersForNamespaces.InformersFor(operatorclient.GlobalMachineSpecifiedConfigNamespace).
 		Core().V1().Secrets().Lister().Secrets(operatorclient.GlobalMachineSpecifiedConfigNamespace)
-	c.secretClient = kubeClient.CoreV1().Secrets(operatorclient.GlobalMachineSpecifiedConfigNamespace)
+	c.secretClient = kubeClient.CoreV1()
 
 	return c
 }
 
-func (c *EncryptionPruneController) sync() error {
-	operatorSpec, _, _, err := c.operatorClient.GetStaticPodOperatorState()
+func (c *EncryptionMigrationController) sync() error {
+	operatorSpec, _, _, err := c.operatorClient.GetOperatorState()
 	if err != nil {
 		return err
 	}
@@ -89,55 +88,77 @@ func (c *EncryptionPruneController) sync() error {
 		return nil
 	}
 
-	// TODO do we want to use this to control the number we keep around?
-	_ = operatorSpec.SucceededRevisionLimit
+	if ready, err := isStaticPodAtLatestRevision(c.operatorClient); err != nil || !ready {
+		return err // we will get re-kicked when the operator status updates
+	}
 
-	configError := c.handleEncryptionPrune()
+	configError, isProgressing := c.handleEncryptionMigration()
 
 	// update failing condition
-	cond := operatorv1.OperatorCondition{
-		Type:   "EncryptionPruneControllerDegraded",
+	degraded := operatorv1.OperatorCondition{
+		Type:   "EncryptionMigrationControllerDegraded",
 		Status: operatorv1.ConditionFalse,
 	}
 	if configError != nil {
-		cond.Status = operatorv1.ConditionTrue
-		cond.Reason = "Error"
-		cond.Message = configError.Error()
+		degraded.Status = operatorv1.ConditionTrue
+		degraded.Reason = "Error"
+		degraded.Message = configError.Error()
 	}
-	if _, _, updateError := operatorv1helpers.UpdateStatus(c.operatorClient, operatorv1helpers.UpdateConditionFn(cond)); updateError != nil {
+
+	// update progressing condition
+	progressing := operatorv1.OperatorCondition{
+		Type:   "EncryptionMigrationControllerProgressing",
+		Status: operatorv1.ConditionFalse,
+	}
+	if configError == nil && isProgressing { // TODO need to think this logic through
+		degraded.Status = operatorv1.ConditionTrue
+		degraded.Reason = "StorageMigration"
+		degraded.Message = "" // TODO maybe put job information
+	}
+
+	if _, _, updateError := operatorv1helpers.UpdateStatus(c.operatorClient,
+		operatorv1helpers.UpdateConditionFn(degraded),
+		operatorv1helpers.UpdateConditionFn(progressing),
+	); updateError != nil {
 		return updateError
 	}
 
 	return configError
 }
 
-func (c *EncryptionPruneController) handleEncryptionPrune() error {
+func (c *EncryptionMigrationController) handleEncryptionMigration() (error, bool) {
 	encryptionSecrets, err := c.secretLister.List(c.componentSelector)
 	if err != nil {
-		return err
+		return err, false
 	}
 
 	encryptionState := getEncryptionState(encryptionSecrets)
 
-	var deleteErrs []error
-	for _, grKeys := range encryptionState {
-		deleteCount := len(grKeys.migratedSecrets) - 10 // TODO see SucceededRevisionLimit comment above
-		if deleteCount <= 0 {
+	for gr, grKeys := range encryptionState {
+		if len(grKeys.unmigratedSecrets) == 0 {
 			continue
 		}
-		for _, name := range grKeys.migratedSecrets[:deleteCount] {
-			deleteErrs = append(deleteErrs, c.secretClient.Delete(name, nil))
+		for _, unmigratedSecret := range grKeys.unmigratedSecrets {
+			if len(unmigratedSecret.Annotations[encryptionSecretMigrationJob]) > 0 {
+				// TODO
+			}
 		}
+		_ = c.startMigration(gr) // TODO
 	}
-	return utilerrors.FilterOut(utilerrors.NewAggregate(deleteErrs), errors.IsNotFound)
+
+	return nil, false // TODO
 }
 
-func (c *EncryptionPruneController) Run(stopCh <-chan struct{}) {
+func (c *EncryptionMigrationController) startMigration(gr schema.GroupResource) error {
+	return nil
+}
+
+func (c *EncryptionMigrationController) Run(stopCh <-chan struct{}) {
 	defer utilruntime.HandleCrash()
 	defer c.queue.ShutDown()
 
-	klog.Infof("Starting EncryptionPruneController")
-	defer klog.Infof("Shutting down EncryptionPruneController")
+	klog.Infof("Starting EncryptionMigrationController")
+	defer klog.Infof("Shutting down EncryptionMigrationController")
 	if !cache.WaitForCacheSync(stopCh, c.preRunCachesSynced...) {
 		utilruntime.HandleError(fmt.Errorf("caches did not sync"))
 		return
@@ -149,12 +170,12 @@ func (c *EncryptionPruneController) Run(stopCh <-chan struct{}) {
 	<-stopCh
 }
 
-func (c *EncryptionPruneController) runWorker() {
+func (c *EncryptionMigrationController) runWorker() {
 	for c.processNextWorkItem() {
 	}
 }
 
-func (c *EncryptionPruneController) processNextWorkItem() bool {
+func (c *EncryptionMigrationController) processNextWorkItem() bool {
 	dsKey, quit := c.queue.Get()
 	if quit {
 		return false
@@ -173,10 +194,10 @@ func (c *EncryptionPruneController) processNextWorkItem() bool {
 	return true
 }
 
-func (c *EncryptionPruneController) eventHandler() cache.ResourceEventHandler {
+func (c *EncryptionMigrationController) eventHandler() cache.ResourceEventHandler {
 	return cache.ResourceEventHandlerFuncs{
-		AddFunc:    func(obj interface{}) { c.queue.Add(pruneWorkKey) },
-		UpdateFunc: func(old, new interface{}) { c.queue.Add(pruneWorkKey) },
-		DeleteFunc: func(obj interface{}) { c.queue.Add(pruneWorkKey) },
+		AddFunc:    func(obj interface{}) { c.queue.Add(migrationWorkKey) },
+		UpdateFunc: func(old, new interface{}) { c.queue.Add(migrationWorkKey) },
+		DeleteFunc: func(obj interface{}) { c.queue.Add(migrationWorkKey) },
 	}
 }

@@ -27,6 +27,7 @@ const (
 // annotations used to mark the current state of the secret
 const (
 	encryptionSecretMigrationTimestamp = "encryption.operator.openshift.io/migration-timestamp"
+	encryptionSecretMigrationJob       = "encryption.operator.openshift.io/migration-job"
 )
 
 // keys used to find specific values in the secret
@@ -45,9 +46,10 @@ func init() {
 
 type groupResourcesState map[schema.GroupResource]keys
 type keys struct {
-	writeKey        apiserverconfigv1.Key
-	readKeys        []apiserverconfigv1.Key
-	migratedSecrets []string
+	writeKey          apiserverconfigv1.Key
+	readKeys          []apiserverconfigv1.Key
+	migratedSecrets   []string
+	unmigratedSecrets []*corev1.Secret
 }
 
 func getEncryptionState(encryptionSecrets []*corev1.Secret) groupResourcesState {
@@ -73,6 +75,8 @@ func getEncryptionState(encryptionSecrets []*corev1.Secret) groupResourcesState 
 		if len(encryptionSecret.Annotations[encryptionSecretMigrationTimestamp]) > 0 {
 			grState.writeKey = key
 			grState.migratedSecrets = append(grState.migratedSecrets, encryptionSecret.Name)
+		} else {
+			grState.unmigratedSecrets = append(grState.unmigratedSecrets, encryptionSecret)
 		}
 
 		encryptionState[gr] = grState
