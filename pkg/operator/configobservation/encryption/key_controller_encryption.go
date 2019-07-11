@@ -55,9 +55,9 @@ func NewEncryptionKeyController(
 ) *EncryptionKeyController {
 	c := &EncryptionKeyController{
 		operatorClient: operatorClient,
-		eventRecorder:  eventRecorder.WithComponentSuffix("encryption-prune-controller"),
+		eventRecorder:  eventRecorder.WithComponentSuffix("encryption-key-controller"), // TODO unused
 
-		queue: workqueue.NewNamedRateLimitingQueue(workqueue.DefaultControllerRateLimiter(), "EncryptionPruneController"),
+		queue: workqueue.NewNamedRateLimitingQueue(workqueue.DefaultControllerRateLimiter(), "EncryptionKeyController"),
 
 		preRunCachesSynced: []cache.InformerSynced{
 			operatorClient.Informer().HasSynced,
