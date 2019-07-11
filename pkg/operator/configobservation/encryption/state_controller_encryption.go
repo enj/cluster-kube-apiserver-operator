@@ -8,6 +8,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
 	apiserverconfigv1 "k8s.io/apiserver/pkg/apis/config/v1"
@@ -21,7 +22,6 @@ import (
 	operatorv1 "github.com/openshift/api/operator/v1"
 	"github.com/openshift/cluster-kube-apiserver-operator/pkg/operator/operatorclient"
 	"github.com/openshift/library-go/pkg/operator/events"
-	"github.com/openshift/library-go/pkg/operator/management"
 	"github.com/openshift/library-go/pkg/operator/resource/resourceapply"
 	operatorv1helpers "github.com/openshift/library-go/pkg/operator/v1helpers"
 )
@@ -36,6 +36,8 @@ type EncryptionStateController struct {
 
 	preRunCachesSynced []cache.InformerSynced
 
+	validGRs map[schema.GroupResource]bool
+
 	destName          string
 	componentSelector labels.Selector
 
@@ -49,6 +51,7 @@ func NewEncryptionStateController(
 	kubeInformersForNamespaces operatorv1helpers.KubeInformersForNamespaces,
 	kubeClient kubernetes.Interface,
 	eventRecorder events.Recorder,
+	validGRs map[schema.GroupResource]bool,
 ) *EncryptionStateController {
 	c := &EncryptionStateController{
 		operatorClient: operatorClient,
@@ -60,6 +63,8 @@ func NewEncryptionStateController(
 			operatorClient.Informer().HasSynced,
 			kubeInformersForNamespaces.InformersFor(operatorclient.GlobalMachineSpecifiedConfigNamespace).Core().V1().Secrets().Informer().HasSynced,
 		},
+
+		validGRs: validGRs,
 
 		destName: destName,
 	}
@@ -85,16 +90,7 @@ func NewEncryptionStateController(
 }
 
 func (c *EncryptionStateController) sync() error {
-	operatorSpec, _, _, err := c.operatorClient.GetOperatorState()
-	if err != nil {
-		return err
-	}
-
-	if !management.IsOperatorManaged(operatorSpec.ManagementState) {
-		return nil
-	}
-
-	if ready, err := isStaticPodAtLatestRevision(c.operatorClient); err != nil || !ready {
+	if ready, err := shouldRunEncryptionController(c.operatorClient); err != nil || !ready {
 		return err // we will get re-kicked when the operator status updates
 	}
 
@@ -123,7 +119,7 @@ func (c *EncryptionStateController) handleEncryptionStateConfig() error {
 		return err
 	}
 
-	encryptionState := getEncryptionState(encryptionSecrets)
+	encryptionState := getEncryptionState(encryptionSecrets, c.validGRs)
 
 	resourceConfigs := getResourceConfigs(encryptionState)
 
@@ -199,23 +195,4 @@ func (c *EncryptionStateController) eventHandler() cache.ResourceEventHandler {
 		UpdateFunc: func(old, new interface{}) { c.queue.Add(stateWorkKey) },
 		DeleteFunc: func(obj interface{}) { c.queue.Add(stateWorkKey) },
 	}
-}
-
-func isStaticPodAtLatestRevision(operatorClient operatorv1helpers.StaticPodOperatorClient) (bool, error) {
-	_, status, _, err := operatorClient.GetStaticPodOperatorStateWithQuorum() // force live read
-	if err != nil {
-		return false, err
-	}
-
-	if len(status.NodeStatuses) == 0 {
-		return false, nil
-	}
-
-	for _, nodeStatus := range status.NodeStatuses {
-		if nodeStatus.CurrentRevision != status.LatestAvailableRevision {
-			return false, nil
-		}
-	}
-
-	return true, nil
 }

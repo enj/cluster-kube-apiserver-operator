@@ -84,16 +84,18 @@ func RunOperator(ctx *controllercmd.ControllerContext) error {
 		ctx.EventRecorder,
 	)
 
-	encryptionController := encryption.NewEncryptionController(
+	validGRs := map[schema.GroupResource]bool{
+		schema.GroupResource{Group: "", Resource: "secrets"}:    true,
+		schema.GroupResource{Group: "", Resource: "configmaps"}: true,
+	}
+
+	encryptionKeyController := encryption.NewEncryptionKeyController(
 		operatorclient.TargetNamespace,
-		"encryption-config-kube-apiserver",
 		operatorClient,
 		kubeInformersForNamespaces,
-		operatorConfigClient.OperatorV1(),
 		kubeClient,
 		ctx.EventRecorder,
-		schema.GroupResource{Group: "", Resource: "secrets"},
-		schema.GroupResource{Group: "", Resource: "configmaps"},
+		validGRs,
 	)
 
 	encryptionStateController := encryption.NewEncryptionStateController(
@@ -103,6 +105,7 @@ func RunOperator(ctx *controllercmd.ControllerContext) error {
 		kubeInformersForNamespaces,
 		kubeClient,
 		ctx.EventRecorder,
+		validGRs,
 	)
 
 	encryptionPruneController := encryption.NewEncryptionPruneController(
@@ -111,6 +114,7 @@ func RunOperator(ctx *controllercmd.ControllerContext) error {
 		kubeInformersForNamespaces,
 		kubeClient,
 		ctx.EventRecorder,
+		validGRs,
 	)
 
 	encryptionMigrationController := encryption.NewEncryptionMigrationController(
@@ -119,6 +123,7 @@ func RunOperator(ctx *controllercmd.ControllerContext) error {
 		kubeInformersForNamespaces,
 		kubeClient,
 		ctx.EventRecorder,
+		validGRs,
 	)
 
 	targetConfigReconciler := targetconfigcontroller.NewTargetConfigController(
@@ -198,7 +203,7 @@ func RunOperator(ctx *controllercmd.ControllerContext) error {
 	go resourceSyncController.Run(1, ctx.Done())
 	go targetConfigReconciler.Run(1, ctx.Done())
 	go configObserver.Run(1, ctx.Done())
-	go encryptionController.Run(ctx.Done())
+	go encryptionKeyController.Run(ctx.Done())
 	go encryptionStateController.Run(ctx.Done())
 	go encryptionPruneController.Run(ctx.Done())
 	go encryptionMigrationController.Run(ctx.Done())

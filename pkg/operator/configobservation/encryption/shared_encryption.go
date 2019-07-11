@@ -13,6 +13,9 @@ import (
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	apiserverconfigv1 "k8s.io/apiserver/pkg/apis/config/v1"
 	"k8s.io/klog"
+
+	"github.com/openshift/library-go/pkg/operator/management"
+	operatorv1helpers "github.com/openshift/library-go/pkg/operator/v1helpers"
 )
 
 // labels used to find secrets that build up the final encryption config
@@ -46,13 +49,17 @@ func init() {
 
 type groupResourcesState map[schema.GroupResource]keys
 type keys struct {
-	writeKey          apiserverconfigv1.Key
-	readKeys          []apiserverconfigv1.Key
-	migratedSecrets   []string
+	writeKey       apiserverconfigv1.Key
+	writeKeyID     uint64
+	writeKeySecret *corev1.Secret
+
+	readKeys []apiserverconfigv1.Key
+
+	migratedSecrets   []*corev1.Secret
 	unmigratedSecrets []*corev1.Secret
 }
 
-func getEncryptionState(encryptionSecrets []*corev1.Secret) groupResourcesState {
+func getEncryptionState(encryptionSecrets []*corev1.Secret, validGRs map[schema.GroupResource]bool) groupResourcesState {
 	// make sure we order lexicographically to get the correct write key
 	sort.Slice(encryptionSecrets, func(i, j int) bool {
 		return encryptionSecrets[i].Name < encryptionSecrets[j].Name
@@ -61,7 +68,7 @@ func getEncryptionState(encryptionSecrets []*corev1.Secret) groupResourcesState 
 	encryptionState := groupResourcesState{}
 
 	for _, encryptionSecret := range encryptionSecrets {
-		gr, key, ok := secretToKey(encryptionSecret)
+		gr, key, keyID, ok := secretToKey(encryptionSecret, validGRs)
 		if !ok {
 			klog.Infof("skipping encryption secret %s as it has invalid data", encryptionSecret.Name)
 			continue
@@ -74,7 +81,9 @@ func getEncryptionState(encryptionSecrets []*corev1.Secret) groupResourcesState 
 		// keep overwriting the write key with the latest key that has been migrated to
 		if len(encryptionSecret.Annotations[encryptionSecretMigrationTimestamp]) > 0 {
 			grState.writeKey = key
-			grState.migratedSecrets = append(grState.migratedSecrets, encryptionSecret.Name)
+			grState.writeKeyID = keyID
+			grState.writeKeySecret = encryptionSecret
+			grState.migratedSecrets = append(grState.migratedSecrets, encryptionSecret)
 		} else {
 			grState.unmigratedSecrets = append(grState.unmigratedSecrets, encryptionSecret)
 		}
@@ -85,7 +94,7 @@ func getEncryptionState(encryptionSecrets []*corev1.Secret) groupResourcesState 
 	return encryptionState
 }
 
-func secretToKey(encryptionSecret *corev1.Secret) (schema.GroupResource, apiserverconfigv1.Key, bool) {
+func secretToKey(encryptionSecret *corev1.Secret, validGRs map[schema.GroupResource]bool) (schema.GroupResource, apiserverconfigv1.Key, uint64, bool) {
 	group := encryptionSecret.Labels[encryptionSecretGroup]
 	resource := encryptionSecret.Labels[encryptionSecretResource]
 	keyData := encryptionSecret.Data[encryptionSecretKeyData]
@@ -104,9 +113,9 @@ func secretToKey(encryptionSecret *corev1.Secret) (schema.GroupResource, apiserv
 		Name:   strconv.FormatUint(keyID%1000, 10),
 		Secret: base64.StdEncoding.EncodeToString(keyData),
 	}
-	invalidKey := len(resource) == 0 || len(keyData) == 0 || lastIdx == -1 || keyIDErr != nil
+	invalidKey := len(resource) == 0 || len(keyData) == 0 || lastIdx == -1 || keyIDErr != nil || !validGRs[gr]
 
-	return gr, key, !invalidKey
+	return gr, key, keyID, !invalidKey
 }
 
 func getResourceConfigs(encryptionState groupResourcesState) []apiserverconfigv1.ResourceConfiguration {
@@ -165,4 +174,36 @@ func keysToProviders(grKeys keys) []apiserverconfigv1.ProviderConfiguration {
 	}
 
 	return providers
+}
+
+func shouldRunEncryptionController(operatorClient operatorv1helpers.StaticPodOperatorClient) (bool, error) {
+	operatorSpec, _, _, err := operatorClient.GetStaticPodOperatorState()
+	if err != nil {
+		return false, err
+	}
+
+	if !management.IsOperatorManaged(operatorSpec.ManagementState) {
+		return false, nil
+	}
+
+	return isStaticPodAtLatestRevision(operatorClient)
+}
+
+func isStaticPodAtLatestRevision(operatorClient operatorv1helpers.StaticPodOperatorClient) (bool, error) {
+	_, status, _, err := operatorClient.GetStaticPodOperatorStateWithQuorum() // force live read
+	if err != nil {
+		return false, err
+	}
+
+	if len(status.NodeStatuses) == 0 {
+		return false, nil
+	}
+
+	for _, nodeStatus := range status.NodeStatuses {
+		if nodeStatus.CurrentRevision != status.LatestAvailableRevision {
+			return false, nil
+		}
+	}
+
+	return true, nil
 }

@@ -19,7 +19,6 @@ import (
 	operatorv1 "github.com/openshift/api/operator/v1"
 	"github.com/openshift/cluster-kube-apiserver-operator/pkg/operator/operatorclient"
 	"github.com/openshift/library-go/pkg/operator/events"
-	"github.com/openshift/library-go/pkg/operator/management"
 	operatorv1helpers "github.com/openshift/library-go/pkg/operator/v1helpers"
 )
 
@@ -33,6 +32,8 @@ type EncryptionMigrationController struct {
 
 	preRunCachesSynced []cache.InformerSynced
 
+	validGRs map[schema.GroupResource]bool
+
 	componentSelector labels.Selector
 
 	secretLister corev1listers.SecretNamespaceLister
@@ -45,6 +46,7 @@ func NewEncryptionMigrationController(
 	kubeInformersForNamespaces operatorv1helpers.KubeInformersForNamespaces,
 	kubeClient kubernetes.Interface,
 	eventRecorder events.Recorder,
+	validGRs map[schema.GroupResource]bool,
 ) *EncryptionMigrationController {
 	c := &EncryptionMigrationController{
 		operatorClient: operatorClient,
@@ -56,6 +58,8 @@ func NewEncryptionMigrationController(
 			operatorClient.Informer().HasSynced,
 			kubeInformersForNamespaces.InformersFor(operatorclient.GlobalMachineSpecifiedConfigNamespace).Core().V1().Secrets().Informer().HasSynced,
 		},
+
+		validGRs: validGRs,
 	}
 
 	labelSelector, err := metav1.ParseToLabelSelector(encryptionSecretComponent + "=" + targetNamespace)
@@ -79,16 +83,7 @@ func NewEncryptionMigrationController(
 }
 
 func (c *EncryptionMigrationController) sync() error {
-	operatorSpec, _, _, err := c.operatorClient.GetOperatorState()
-	if err != nil {
-		return err
-	}
-
-	if !management.IsOperatorManaged(operatorSpec.ManagementState) {
-		return nil
-	}
-
-	if ready, err := isStaticPodAtLatestRevision(c.operatorClient); err != nil || !ready {
+	if ready, err := shouldRunEncryptionController(c.operatorClient); err != nil || !ready {
 		return err // we will get re-kicked when the operator status updates
 	}
 
@@ -132,7 +127,7 @@ func (c *EncryptionMigrationController) handleEncryptionMigration() (error, bool
 		return err, false
 	}
 
-	encryptionState := getEncryptionState(encryptionSecrets)
+	encryptionState := getEncryptionState(encryptionSecrets, c.validGRs)
 
 	for gr, grKeys := range encryptionState {
 		if len(grKeys.unmigratedSecrets) == 0 {
