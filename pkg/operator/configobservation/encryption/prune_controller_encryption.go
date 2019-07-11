@@ -89,6 +89,10 @@ func (c *EncryptionPruneController) sync() error {
 		return nil
 	}
 
+	if ready, err := isStaticPodAtLatestRevision(c.operatorClient); err != nil || !ready {
+		return err // we will get re-kicked when the operator status updates
+	}
+
 	// TODO do we want to use this to control the number we keep around?
 	_ = operatorSpec.SucceededRevisionLimit
 
