@@ -134,7 +134,7 @@ func (c *EncryptionKeyController) handleEncryptionKey() error {
 			continue
 		}
 
-		nextKeyID := grKeys.writeKeyID + 1
+		nextKeyID := grKeys.desiredWriteKeyID + 1
 		keySecret := c.generateKeySecret(gr, nextKeyID)
 		actualKeySecret, createErr := c.secretClient.Create(keySecret)
 		if errors.IsAlreadyExists(createErr) {
@@ -227,7 +227,7 @@ func needsNewKey(grKeys keys) bool {
 		return true
 	}
 
-	migrationTimestampStr := grKeys.writeKeySecret.Annotations[encryptionSecretMigrationTimestamp]
+	migrationTimestampStr := grKeys.desiredWriteKeySecret.Annotations[encryptionSecretMigrationTimestamp]
 	migrationTimestamp, err := time.Parse(time.RFC3339, migrationTimestampStr)
 	if err != nil {
 		return true // eh?

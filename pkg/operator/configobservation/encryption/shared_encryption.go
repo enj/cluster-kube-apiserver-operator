@@ -7,6 +7,8 @@ import (
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/runtime/serializer"
@@ -19,7 +21,9 @@ import (
 )
 
 // labels used to find secrets that build up the final encryption config
-// the names of the secrets are lexicographically ordered with the latest secret being the current write key
+// the names of the secrets are in format <shared prefix>-<unique monotonically increasing uint>
+// they are listed in ascending order
+// the latest secret is the current desired write key
 const (
 	encryptionSecretComponent = "encryption.operator.openshift.io/component"
 
@@ -38,20 +42,20 @@ const (
 	encryptionSecretKeyData = "encryption.operator.openshift.io-key"
 )
 
-var encoder runtime.Encoder
+var codec runtime.Serializer
 
 func init() {
 	scheme := runtime.NewScheme()
 	codecs := serializer.NewCodecFactory(scheme)
 	utilruntime.Must(apiserverconfigv1.AddToScheme(scheme))
-	encoder = codecs.LegacyCodec(apiserverconfigv1.SchemeGroupVersion)
+	codec = codecs.LegacyCodec(apiserverconfigv1.SchemeGroupVersion)
 }
 
 type groupResourcesState map[schema.GroupResource]keys
 type keys struct {
-	writeKey       apiserverconfigv1.Key
-	writeKeyID     uint64
-	writeKeySecret *corev1.Secret
+	desiredWriteKey       apiserverconfigv1.Key
+	desiredWriteKeyID     uint64
+	desiredWriteKeySecret *corev1.Secret
 
 	readKeys []apiserverconfigv1.Key
 
@@ -60,9 +64,11 @@ type keys struct {
 }
 
 func getEncryptionState(encryptionSecrets []*corev1.Secret, validGRs map[schema.GroupResource]bool) groupResourcesState {
-	// make sure we order lexicographically to get the correct write key
+	// make sure we order to get the correct desired write key, see comment at top
 	sort.Slice(encryptionSecrets, func(i, j int) bool {
-		return encryptionSecrets[i].Name < encryptionSecrets[j].Name
+		a, _ := secretToKeyID(encryptionSecrets[i])
+		b, _ := secretToKeyID(encryptionSecrets[j])
+		return a < b
 	})
 
 	encryptionState := groupResourcesState{}
@@ -80,9 +86,9 @@ func getEncryptionState(encryptionSecrets []*corev1.Secret, validGRs map[schema.
 		grState.readKeys = append(grState.readKeys, key)
 		// keep overwriting the write key with the latest key that has been migrated to
 		if len(encryptionSecret.Annotations[encryptionSecretMigrationTimestamp]) > 0 {
-			grState.writeKey = key
-			grState.writeKeyID = keyID
-			grState.writeKeySecret = encryptionSecret
+			grState.desiredWriteKey = key
+			grState.desiredWriteKeyID = keyID
+			grState.desiredWriteKeySecret = encryptionSecret
 			grState.migratedSecrets = append(grState.migratedSecrets, encryptionSecret)
 		} else {
 			grState.unmigratedSecrets = append(grState.unmigratedSecrets, encryptionSecret)
@@ -99,11 +105,7 @@ func secretToKey(encryptionSecret *corev1.Secret, validGRs map[schema.GroupResou
 	resource := encryptionSecret.Labels[encryptionSecretResource]
 	keyData := encryptionSecret.Data[encryptionSecretKeyData]
 
-	// name of secret is expected to have format <shared prefix>-<unique monotonically increasing uint>
-	// see lexicographical ordering above in getEncryptionState func
-	lastIdx := strings.LastIndex(encryptionSecret.Name, "-")
-	keyIDStr := encryptionSecret.Name[lastIdx+1:]
-	keyID, keyIDErr := strconv.ParseUint(keyIDStr, 10, 0)
+	keyID, validKeyID := secretToKeyID(encryptionSecret)
 
 	gr := schema.GroupResource{Group: group, Resource: resource}
 	key := apiserverconfigv1.Key{
@@ -113,9 +115,18 @@ func secretToKey(encryptionSecret *corev1.Secret, validGRs map[schema.GroupResou
 		Name:   strconv.FormatUint(keyID%1000, 10),
 		Secret: base64.StdEncoding.EncodeToString(keyData),
 	}
-	invalidKey := len(resource) == 0 || len(keyData) == 0 || lastIdx == -1 || keyIDErr != nil || !validGRs[gr]
+	invalidKey := len(resource) == 0 || len(keyData) == 0 || !validKeyID || !validGRs[gr]
 
 	return gr, key, keyID, !invalidKey
+}
+
+func secretToKeyID(encryptionSecret *corev1.Secret) (uint64, bool) {
+	// see format and ordering comment at top
+	lastIdx := strings.LastIndex(encryptionSecret.Name, "-")
+	keyIDStr := encryptionSecret.Name[lastIdx+1:]
+	keyID, keyIDErr := strconv.ParseUint(keyIDStr, 10, 0)
+	invalidKeyID := lastIdx == -1 || keyIDErr != nil
+	return keyID, !invalidKeyID
 }
 
 func getResourceConfigs(encryptionState groupResourcesState) []apiserverconfigv1.ResourceConfiguration {
@@ -137,7 +148,7 @@ func getResourceConfigs(encryptionState groupResourcesState) []apiserverconfigv1
 }
 
 func keysToProviders(grKeys keys) []apiserverconfigv1.ProviderConfiguration {
-	hasWriteKey := len(grKeys.writeKey.Secret) != 0
+	hasWriteKey := len(grKeys.desiredWriteKey.Secret) != 0
 
 	// read keys have a duplicate of the write key
 	// or there is no write key
@@ -145,13 +156,13 @@ func keysToProviders(grKeys keys) []apiserverconfigv1.ProviderConfiguration {
 
 	// write key comes first
 	if hasWriteKey {
-		allKeys = append(allKeys, grKeys.writeKey)
+		allKeys = append(allKeys, grKeys.desiredWriteKey)
 	}
 
 	// iterate in reverse to order the read keys in optimal order
 	for i := len(grKeys.readKeys) - 1; i >= 0; i-- {
 		readKey := grKeys.readKeys[i]
-		if readKey.Name == grKeys.writeKey.Name {
+		if readKey.Name == grKeys.desiredWriteKey.Name {
 			continue // if present, drop the duplicate write key from the list
 		}
 		allKeys = append(allKeys, readKey)
@@ -182,28 +193,17 @@ func shouldRunEncryptionController(operatorClient operatorv1helpers.StaticPodOpe
 		return false, err
 	}
 
-	if !management.IsOperatorManaged(operatorSpec.ManagementState) {
-		return false, nil
-	}
-
-	return isStaticPodAtLatestRevision(operatorClient)
+	return management.IsOperatorManaged(operatorSpec.ManagementState), nil
 }
 
-func isStaticPodAtLatestRevision(operatorClient operatorv1helpers.StaticPodOperatorClient) (bool, error) {
-	_, status, _, err := operatorClient.GetStaticPodOperatorStateWithQuorum() // force live read
+func labelSelectorOrDie(label string) labels.Selector {
+	labelSelector, err := metav1.ParseToLabelSelector(label)
 	if err != nil {
-		return false, err
+		panic(err) // coding error
 	}
-
-	if len(status.NodeStatuses) == 0 {
-		return false, nil
+	componentSelector, err := metav1.LabelSelectorAsSelector(labelSelector)
+	if err != nil {
+		panic(err) // coding error
 	}
-
-	for _, nodeStatus := range status.NodeStatuses {
-		if nodeStatus.CurrentRevision != status.LatestAvailableRevision {
-			return false, nil
-		}
-	}
-
-	return true, nil
+	return componentSelector
 }
