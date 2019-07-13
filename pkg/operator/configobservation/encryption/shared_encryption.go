@@ -262,34 +262,3 @@ func getEncryptionConfig(secrets corev1client.SecretInterface, revision string) 
 	}
 	return encryptionConfig, nil
 }
-
-type actualKeys struct {
-	writeKey apiserverconfigv1.Key
-	readKeys []apiserverconfigv1.Key
-}
-
-func getGRActualKeys(encryptionConfig *apiserverconfigv1.EncryptionConfiguration) map[schema.GroupResource]actualKeys {
-	out := map[schema.GroupResource]actualKeys{}
-	for _, resourceConfig := range encryptionConfig.Resources {
-		if len(resourceConfig.Resources) == 0 || len(resourceConfig.Providers) < 2 {
-			continue // should never happen
-		}
-
-		gr := schema.ParseGroupResource(resourceConfig.Resources[0])
-		provider1 := resourceConfig.Providers[0]
-		provider2 := resourceConfig.Providers[1]
-
-		switch {
-		case provider1.AESCBC != nil && len(provider1.AESCBC.Keys) != 0:
-			out[gr] = actualKeys{
-				writeKey: provider1.AESCBC.Keys[0],
-				readKeys: provider1.AESCBC.Keys[1:],
-			}
-		case provider1.Identity != nil && provider2.AESCBC != nil && len(provider2.AESCBC.Keys) != 0:
-			out[gr] = actualKeys{
-				readKeys: provider2.AESCBC.Keys,
-			}
-		}
-	}
-	return out
-}

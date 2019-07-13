@@ -151,25 +151,8 @@ func (c *EncryptionMigrationController) handleEncryptionMigration() (error, bool
 	}
 
 	// no storage migration until all masters catch up with revision
-	grActualKeys := getGRActualKeys(encryptionConfig)
-	for gr, grKeys := range encryptionState {
-		allKeys, hasKeys := grActualKeys[gr]
-		hasDesiredWriteKey := len(grKeys.desiredWriteKey.Secret) != 0
-
-		if !hasKeys && !hasDesiredWriteKey {
-			if len(grKeys.readKeys) != 0 {
-				return fmt.Errorf("identity write but read keys not in sync"), false // TODO maybe synthetic retry
-			}
-			continue // we currently expect identity
-		}
-
-		if allKeys.writeKey != grKeys.desiredWriteKey {
-			return fmt.Errorf("write key not in sync"), false // TODO maybe synthetic retry
-		}
-
-		if !reflect.DeepEqual(allKeys.readKeys, grKeys.readKeys) {
-			return fmt.Errorf("read keys not in sync"), false // TODO maybe synthetic retry
-		}
+	if !reflect.DeepEqual(encryptionConfig.Resources, getResourceConfigs(encryptionState)) {
+		return fmt.Errorf("resource config not in sync"), false // TODO maybe synthetic retry
 	}
 
 	// now we can attempt migration
