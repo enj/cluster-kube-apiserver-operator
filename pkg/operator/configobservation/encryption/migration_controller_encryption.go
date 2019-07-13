@@ -170,6 +170,9 @@ func (c *EncryptionMigrationController) handleEncryptionMigration() (error, bool
 		for _, unmigratedSecret := range grKeys.unmigratedSecrets {
 			// if len(unmigratedSecret.Annotations[encryptionSecretMigrationJob]) > 0 {}
 			unmigratedSecretCopy := unmigratedSecret.DeepCopy()
+			if unmigratedSecretCopy.Annotations == nil {
+				unmigratedSecretCopy.Annotations = map[string]string{}
+			}
 			unmigratedSecretCopy.Annotations[encryptionSecretMigrationTimestamp] = now
 			_, updateErr := c.secretClient.Secrets(operatorclient.GlobalMachineSpecifiedConfigNamespace).Update(unmigratedSecretCopy)
 			errs = append(errs, updateErr)
