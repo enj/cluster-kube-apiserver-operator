@@ -245,7 +245,7 @@ func getEncryptionConfig(secrets corev1client.SecretInterface, revision string) 
 		return nil, err
 	}
 
-	encryptionConfigObj, err := runtime.Decode(codec, encryptionConfigSecret.Data[encryptionSecretKeyData])
+	encryptionConfigObj, err := runtime.Decode(codec, encryptionConfigSecret.Data[encryptionConfSecret])
 	if err != nil {
 		return nil, err
 	}
