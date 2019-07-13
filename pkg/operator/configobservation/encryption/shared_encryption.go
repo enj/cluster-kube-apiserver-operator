@@ -2,6 +2,7 @@ package encryption
 
 import (
 	"encoding/base64"
+	"fmt"
 	"sort"
 	"strconv"
 	"strings"
@@ -13,7 +14,10 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/runtime/serializer"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/apimachinery/pkg/util/sets"
 	apiserverconfigv1 "k8s.io/apiserver/pkg/apis/config/v1"
+	corev1client "k8s.io/client-go/kubernetes/typed/core/v1"
+	corev1listers "k8s.io/client-go/listers/core/v1"
 	"k8s.io/klog"
 
 	"github.com/openshift/library-go/pkg/operator/management"
@@ -34,13 +38,15 @@ const (
 // annotations used to mark the current state of the secret
 const (
 	encryptionSecretMigrationTimestamp = "encryption.operator.openshift.io/migration-timestamp"
-	encryptionSecretMigrationJob       = "encryption.operator.openshift.io/migration-job"
+	// encryptionSecretMigrationJob       = "encryption.operator.openshift.io/migration-job"
 )
 
 // keys used to find specific values in the secret
 const (
 	encryptionSecretKeyData = "encryption.operator.openshift.io-key"
 )
+
+const revisionLabel = "revision"
 
 var codec runtime.Serializer
 
@@ -206,4 +212,62 @@ func labelSelectorOrDie(label string) labels.Selector {
 		panic(err) // coding error
 	}
 	return componentSelector
+}
+
+func getRevision(podLister corev1listers.PodNamespaceLister) (string, error) {
+	apiServerPods, err := podLister.List(labelSelectorOrDie("apiserver=true"))
+	if err != nil {
+		return "", err
+	}
+
+	revisions := sets.NewString()
+	for _, apiServerPod := range apiServerPods {
+		switch apiServerPod.Status.Phase {
+		case corev1.PodRunning, corev1.PodPending:
+			for _, condition := range apiServerPod.Status.Conditions {
+				if condition.Type == corev1.PodReady && condition.Status == corev1.ConditionTrue {
+					revisions.Insert(apiServerPod.Labels[revisionLabel])
+				}
+			}
+		}
+	}
+
+	if len(revisions) != 1 {
+		return "", nil // api servers have not converged onto a single revision
+	}
+	revision, _ := revisions.PopAny()
+	return revision, nil
+}
+
+func getEncryptionConfig(secrets corev1client.SecretInterface, revision string) (*apiserverconfigv1.EncryptionConfiguration, error) {
+	encryptionConfigSecret, err := secrets.Get(encryptionConfSecret+"-"+revision, metav1.GetOptions{})
+	if err != nil {
+		return nil, err
+	}
+
+	encryptionConfigObj, err := runtime.Decode(codec, encryptionConfigSecret.Data[encryptionSecretKeyData])
+	if err != nil {
+		return nil, err
+	}
+
+	encryptionConfig, ok := encryptionConfigObj.(*apiserverconfigv1.EncryptionConfiguration)
+	if !ok {
+		return nil, fmt.Errorf("encryption config has wrong type %T", encryptionConfigObj)
+	}
+	return encryptionConfig, nil
+}
+
+func getActualKeys(encryptionConfig *apiserverconfigv1.EncryptionConfiguration) map[schema.GroupResource][]apiserverconfigv1.Key {
+	actualKeys := map[schema.GroupResource][]apiserverconfigv1.Key{}
+	for _, resourceConfig := range encryptionConfig.Resources {
+		if len(resourceConfig.Resources) == 0 || len(resourceConfig.Providers) == 0 {
+			continue // should never happen
+		}
+		gr := schema.ParseGroupResource(resourceConfig.Resources[0])
+		provider := resourceConfig.Providers[0]
+		if provider.AESCBC != nil && len(provider.AESCBC.Keys) != 0 {
+			actualKeys[gr] = provider.AESCBC.Keys
+		}
+	}
+	return actualKeys
 }

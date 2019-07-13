@@ -233,7 +233,7 @@ func needsNewKey(grKeys keys) bool {
 		return true // eh?
 	}
 
-	return time.Now().After(migrationTimestamp.Add(24 * time.Hour)) // TODO how often?
+	return time.Now().After(migrationTimestamp.Add(30 * time.Minute)) // TODO how often?
 }
 
 func newAES256Key() []byte {

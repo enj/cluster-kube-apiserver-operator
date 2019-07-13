@@ -121,9 +121,10 @@ func RunOperator(ctx *controllercmd.ControllerContext) error {
 		operatorclient.TargetNamespace,
 		operatorClient,
 		kubeInformersForNamespaces,
-		kubeClient,
+		v1helpers.CachedSecretGetter(kubeClient.CoreV1(), kubeInformersForNamespaces),
 		ctx.EventRecorder,
 		validGRs,
+		dynamicClient,
 	)
 
 	targetConfigReconciler := targetconfigcontroller.NewTargetConfigController(

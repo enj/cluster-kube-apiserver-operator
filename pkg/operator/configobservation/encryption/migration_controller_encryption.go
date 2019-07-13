@@ -2,17 +2,21 @@ package encryption
 
 import (
 	"fmt"
+	"reflect"
 	"time"
 
+	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	utilerrors "k8s.io/apimachinery/pkg/util/errors"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
-	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/dynamic"
 	corev1client "k8s.io/client-go/kubernetes/typed/core/v1"
 	corev1listers "k8s.io/client-go/listers/core/v1"
 	"k8s.io/client-go/tools/cache"
+	"k8s.io/client-go/util/retry"
 	"k8s.io/client-go/util/workqueue"
 	"k8s.io/klog"
 
@@ -34,19 +38,26 @@ type EncryptionMigrationController struct {
 
 	validGRs map[schema.GroupResource]bool
 
+	targetNamespace   string
 	componentSelector labels.Selector
 
-	secretLister corev1listers.SecretNamespaceLister
+	// TODO fix and combine
+	secretLister corev1listers.SecretLister
 	secretClient corev1client.SecretsGetter
+
+	podLister corev1listers.PodNamespaceLister
+
+	dynamicClient dynamic.Interface
 }
 
 func NewEncryptionMigrationController(
 	targetNamespace string,
 	operatorClient operatorv1helpers.StaticPodOperatorClient,
 	kubeInformersForNamespaces operatorv1helpers.KubeInformersForNamespaces,
-	kubeClient kubernetes.Interface,
+	secretClient corev1client.SecretsGetter,
 	eventRecorder events.Recorder,
 	validGRs map[schema.GroupResource]bool,
+	dynamicClient dynamic.Interface, // temporary hack
 ) *EncryptionMigrationController {
 	c := &EncryptionMigrationController{
 		operatorClient: operatorClient,
@@ -57,27 +68,26 @@ func NewEncryptionMigrationController(
 		preRunCachesSynced: []cache.InformerSynced{
 			operatorClient.Informer().HasSynced,
 			kubeInformersForNamespaces.InformersFor(operatorclient.GlobalMachineSpecifiedConfigNamespace).Core().V1().Secrets().Informer().HasSynced,
+			kubeInformersForNamespaces.InformersFor(targetNamespace).Core().V1().Secrets().Informer().HasSynced,
+			kubeInformersForNamespaces.InformersFor(targetNamespace).Core().V1().Pods().Informer().HasSynced,
 		},
 
 		validGRs: validGRs,
+
+		targetNamespace: targetNamespace,
 	}
 
-	labelSelector, err := metav1.ParseToLabelSelector(encryptionSecretComponent + "=" + targetNamespace)
-	if err != nil {
-		panic(err) // coding error
-	}
-	componentSelector, err := metav1.LabelSelectorAsSelector(labelSelector)
-	if err != nil {
-		panic(err) // coding error
-	}
-	c.componentSelector = componentSelector
+	c.componentSelector = labelSelectorOrDie(encryptionSecretComponent + "=" + targetNamespace)
 
 	operatorClient.Informer().AddEventHandler(c.eventHandler())
 	kubeInformersForNamespaces.InformersFor(operatorclient.GlobalMachineSpecifiedConfigNamespace).Core().V1().Secrets().Informer().AddEventHandler(c.eventHandler())
+	kubeInformersForNamespaces.InformersFor(targetNamespace).Core().V1().Secrets().Informer().AddEventHandler(c.eventHandler())
+	kubeInformersForNamespaces.InformersFor(targetNamespace).Core().V1().Pods().Informer().AddEventHandler(c.eventHandler())
 
-	c.secretLister = kubeInformersForNamespaces.InformersFor(operatorclient.GlobalMachineSpecifiedConfigNamespace).
-		Core().V1().Secrets().Lister().Secrets(operatorclient.GlobalMachineSpecifiedConfigNamespace)
-	c.secretClient = kubeClient.CoreV1()
+	c.secretLister = kubeInformersForNamespaces.InformersFor("").Core().V1().Secrets().Lister()
+	c.secretClient = secretClient
+	c.podLister = kubeInformersForNamespaces.InformersFor(targetNamespace).Core().V1().Pods().Lister().Pods(targetNamespace)
+	c.dynamicClient = dynamicClient
 
 	return c
 }
@@ -122,30 +132,86 @@ func (c *EncryptionMigrationController) sync() error {
 }
 
 func (c *EncryptionMigrationController) handleEncryptionMigration() (error, bool) {
-	encryptionSecrets, err := c.secretLister.List(c.componentSelector)
+	encryptionSecrets, err := c.secretLister.Secrets(operatorclient.GlobalMachineSpecifiedConfigNamespace).List(c.componentSelector)
 	if err != nil {
 		return err, false
 	}
 
 	encryptionState := getEncryptionState(encryptionSecrets, c.validGRs)
 
+	// no storage migration during revision changes
+	revision, err := getRevision(c.podLister)
+	if err != nil || len(revision) == 0 {
+		return err, false
+	}
+
+	encryptionConfig, err := getEncryptionConfig(c.secretClient.Secrets(c.targetNamespace), revision)
+	if err != nil {
+		return err, false
+	}
+
+	// no storage migration until all masters catch up with revision
+	actualKeys := getActualKeys(encryptionConfig)
+	for gr, grKeys := range encryptionState {
+		allKeys, hasKeys := actualKeys[gr]
+		hasDesiredWriteKey := len(grKeys.desiredWriteKey.Secret) != 0
+
+		if !hasKeys && !hasDesiredWriteKey {
+			if len(grKeys.readKeys) != 0 {
+				return fmt.Errorf("read keys not in sync"), false // TODO maybe synthetic retry
+			}
+			continue // we currently expect identity
+		}
+
+		if !hasKeys || allKeys[0] != grKeys.desiredWriteKey {
+			return fmt.Errorf("write key not in sync"), false // TODO maybe synthetic retry
+		}
+
+		readKeys := allKeys[1:]
+		if !reflect.DeepEqual(readKeys, grKeys.readKeys) {
+			return fmt.Errorf("read keys not in sync"), false // TODO maybe synthetic retry
+		}
+	}
+
+	// now we can attempt migration
+	var errs []error
 	for gr, grKeys := range encryptionState {
 		if len(grKeys.unmigratedSecrets) == 0 {
 			continue
 		}
-		for _, unmigratedSecret := range grKeys.unmigratedSecrets {
-			if len(unmigratedSecret.Annotations[encryptionSecretMigrationJob]) > 0 {
-				// TODO
-			}
+		migrationErr := c.runStorageMigration(gr)
+		errs = append(errs, migrationErr)
+		if migrationErr != nil {
+			continue
 		}
-		_ = c.startMigration(gr) // TODO
+		now := time.Now().Format(time.RFC3339)
+		for _, unmigratedSecret := range grKeys.unmigratedSecrets {
+			// if len(unmigratedSecret.Annotations[encryptionSecretMigrationJob]) > 0 {}
+			unmigratedSecretCopy := unmigratedSecret.DeepCopy()
+			unmigratedSecretCopy.Annotations[encryptionSecretMigrationTimestamp] = now
+			_, updateErr := c.secretClient.Secrets(operatorclient.GlobalMachineSpecifiedConfigNamespace).Update(unmigratedSecretCopy)
+			errs = append(errs, updateErr)
+		}
 	}
-
-	return nil, false // TODO
+	return utilerrors.NewAggregate(errs), false
 }
 
-func (c *EncryptionMigrationController) startMigration(gr schema.GroupResource) error {
-	return nil
+func (c *EncryptionMigrationController) runStorageMigration(gr schema.GroupResource) error {
+	// TODO version hack
+	d := c.dynamicClient.Resource(gr.WithVersion("v1"))
+	unstructuredList, err := d.List(metav1.ListOptions{})
+	if err != nil {
+		return err
+	}
+	var errs []error
+	for _, obj := range unstructuredList.Items {
+		retryErr := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+			_, updateErr := d.Update(&obj, metav1.UpdateOptions{})
+			return updateErr
+		})
+		errs = append(errs, retryErr)
+	}
+	return utilerrors.FilterOut(utilerrors.NewAggregate(errs), errors.IsNotFound)
 }
 
 func (c *EncryptionMigrationController) Run(stopCh <-chan struct{}) {

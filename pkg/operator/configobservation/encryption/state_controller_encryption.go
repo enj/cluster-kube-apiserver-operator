@@ -10,7 +10,6 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
-	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/wait"
 	apiserverconfigv1 "k8s.io/apiserver/pkg/apis/config/v1"
 	corev1client "k8s.io/client-go/kubernetes/typed/core/v1"
@@ -27,8 +26,6 @@ import (
 )
 
 const stateWorkKey = "key"
-
-const revisionLabel = "revision"
 
 type EncryptionStateController struct {
 	operatorClient operatorv1helpers.StaticPodOperatorClient
@@ -48,8 +45,7 @@ type EncryptionStateController struct {
 	secretLister corev1listers.SecretLister
 	secretClient corev1client.SecretsGetter
 
-	podLister   corev1listers.PodNamespaceLister
-	podSelector labels.Selector
+	podLister corev1listers.PodNamespaceLister
 }
 
 func NewEncryptionStateController(
@@ -80,7 +76,6 @@ func NewEncryptionStateController(
 	}
 
 	c.componentSelector = labelSelectorOrDie(encryptionSecretComponent + "=" + targetNamespace)
-	c.podSelector = labelSelectorOrDie("apiserver=true")
 
 	operatorClient.Informer().AddEventHandler(c.eventHandler())
 	kubeInformersForNamespaces.InformersFor(operatorclient.GlobalMachineSpecifiedConfigNamespace).Core().V1().Secrets().Informer().AddEventHandler(c.eventHandler())
@@ -119,35 +114,19 @@ func (c *EncryptionStateController) sync() error {
 }
 
 func (c *EncryptionStateController) handleEncryptionStateConfig() error {
+	// do not cause new revisions while old ones are rolling out
+	// TODO but does this even matter?
+	revision, err := getRevision(c.podLister)
+	if err != nil || len(revision) == 0 {
+		return err
+	}
+
 	encryptionSecrets, err := c.secretLister.Secrets(operatorclient.GlobalMachineSpecifiedConfigNamespace).List(c.componentSelector)
 	if err != nil {
 		return err
 	}
 
 	encryptionState := getEncryptionState(encryptionSecrets, c.validGRs)
-
-	revision, err := c.getRevision()
-	if err != nil || len(revision) == 0 {
-		return err
-	}
-
-	encryptionConfig, err := c.getEncryptionConfig(revision)
-	if err != nil {
-		return err
-	}
-
-	actualWriteKeys := getActualWriteKeys(encryptionConfig)
-	for gr, grKeys := range encryptionState {
-		actualWriteKey, hasActualWriteKey := actualWriteKeys[gr]
-		hasDesiredWriteKey := len(grKeys.desiredWriteKey.Secret) != 0
-
-		if !hasActualWriteKey && !hasDesiredWriteKey {
-			continue // we currently expect identity
-		}
-		if !hasActualWriteKey || actualWriteKey != grKeys.desiredWriteKey {
-			return fmt.Errorf("write key not in sync") // TODO maybe synthetic retry
-		}
-	}
 
 	resourceConfigs := getResourceConfigs(encryptionState)
 
@@ -157,64 +136,6 @@ func (c *EncryptionStateController) handleEncryptionStateConfig() error {
 	}
 
 	return c.applyEncryptionConfigSecret(resourceConfigs)
-}
-
-func getActualWriteKeys(encryptionConfig *apiserverconfigv1.EncryptionConfiguration) map[schema.GroupResource]apiserverconfigv1.Key {
-	actualWriteKeys := map[schema.GroupResource]apiserverconfigv1.Key{}
-	for _, resourceConfig := range encryptionConfig.Resources {
-		if len(resourceConfig.Resources) == 0 || len(resourceConfig.Providers) == 0 {
-			continue // should never happen
-		}
-		gr := schema.ParseGroupResource(resourceConfig.Resources[0])
-		provider := resourceConfig.Providers[0]
-		if provider.AESCBC != nil && len(provider.AESCBC.Keys) != 0 {
-			actualWriteKeys[gr] = provider.AESCBC.Keys[0]
-		}
-	}
-	return actualWriteKeys
-}
-
-func (c *EncryptionStateController) getEncryptionConfig(revision string) (*apiserverconfigv1.EncryptionConfiguration, error) {
-	encryptionConfigSecret, err := c.secretClient.Secrets(c.targetNamespace).Get(encryptionConfSecret+"-"+revision, metav1.GetOptions{})
-	if err != nil {
-		return nil, err
-	}
-
-	encryptionConfigObj, err := runtime.Decode(codec, encryptionConfigSecret.Data[encryptionSecretKeyData])
-	if err != nil {
-		return nil, err
-	}
-
-	encryptionConfig, ok := encryptionConfigObj.(*apiserverconfigv1.EncryptionConfiguration)
-	if !ok {
-		return nil, fmt.Errorf("encryption config has wrong type %T", encryptionConfigObj)
-	}
-	return encryptionConfig, nil
-}
-
-func (c *EncryptionStateController) getRevision() (string, error) {
-	apiServerPods, err := c.podLister.List(c.podSelector)
-	if err != nil {
-		return "", err
-	}
-
-	revisions := sets.NewString()
-	for _, apiServerPod := range apiServerPods {
-		switch apiServerPod.Status.Phase {
-		case corev1.PodRunning, corev1.PodPending:
-			for _, condition := range apiServerPod.Status.Conditions {
-				if condition.Type == corev1.PodReady && condition.Status == corev1.ConditionTrue {
-					revisions.Insert(apiServerPod.Labels[revisionLabel])
-				}
-			}
-		}
-	}
-
-	if len(revisions) != 1 {
-		return "", nil // api servers have not converged onto a single revision
-	}
-	revision, _ := revisions.PopAny()
-	return revision, nil
 }
 
 func (c *EncryptionStateController) applyEncryptionConfigSecret(resourceConfigs []apiserverconfigv1.ResourceConfiguration) error {
