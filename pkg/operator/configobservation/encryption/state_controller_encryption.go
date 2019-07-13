@@ -140,7 +140,7 @@ func (c *EncryptionStateController) handleEncryptionStateConfig() error {
 
 func (c *EncryptionStateController) applyEncryptionConfigSecret(resourceConfigs []apiserverconfigv1.ResourceConfiguration) error {
 	encryptionConfig := &apiserverconfigv1.EncryptionConfiguration{Resources: resourceConfigs}
-	encryptionConfigBytes, err := runtime.Encode(codec, encryptionConfig)
+	encryptionConfigBytes, err := runtime.Encode(encoder, encryptionConfig)
 	if err != nil {
 		return err // indicates static generated code is broken, unrecoverable
 	}

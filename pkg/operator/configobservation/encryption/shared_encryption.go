@@ -15,6 +15,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/serializer"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/sets"
+	apiserverconfig "k8s.io/apiserver/pkg/apis/config"
 	apiserverconfigv1 "k8s.io/apiserver/pkg/apis/config/v1"
 	corev1client "k8s.io/client-go/kubernetes/typed/core/v1"
 	corev1listers "k8s.io/client-go/listers/core/v1"
@@ -48,13 +49,18 @@ const (
 
 const revisionLabel = "revision"
 
-var codec runtime.Serializer
+var (
+	encoder runtime.Encoder
+	decoder runtime.Decoder
+)
 
 func init() {
 	scheme := runtime.NewScheme()
 	codecs := serializer.NewCodecFactory(scheme)
 	utilruntime.Must(apiserverconfigv1.AddToScheme(scheme))
-	codec = codecs.LegacyCodec(apiserverconfigv1.SchemeGroupVersion)
+	utilruntime.Must(apiserverconfig.AddToScheme(scheme))
+	encoder = codecs.LegacyCodec(apiserverconfigv1.SchemeGroupVersion)
+	decoder = codecs.UniversalDecoder(apiserverconfigv1.SchemeGroupVersion)
 }
 
 type groupResourcesState map[schema.GroupResource]keys
@@ -245,7 +251,7 @@ func getEncryptionConfig(secrets corev1client.SecretInterface, revision string) 
 		return nil, err
 	}
 
-	encryptionConfigObj, err := runtime.Decode(codec, encryptionConfigSecret.Data[encryptionConfSecret])
+	encryptionConfigObj, err := runtime.Decode(decoder, encryptionConfigSecret.Data[encryptionConfSecret])
 	if err != nil {
 		return nil, err
 	}
