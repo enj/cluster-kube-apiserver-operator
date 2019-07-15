@@ -40,6 +40,9 @@ const (
 const (
 	encryptionSecretMigrationTimestamp = "encryption.operator.openshift.io/migration-timestamp"
 	// encryptionSecretMigrationJob       = "encryption.operator.openshift.io/migration-job"
+
+	encryptionSecretReadTimestamp  = "encryption.operator.openshift.io/read-timestamp"
+	encryptionSecretWriteTimestamp = "encryption.operator.openshift.io/write-timestamp"
 )
 
 // keys used to find specific values in the secret
@@ -71,6 +74,7 @@ type keys struct {
 
 	readKeys []apiserverconfigv1.Key
 
+	secrets           []*corev1.Secret
 	migratedSecrets   []*corev1.Secret
 	unmigratedSecrets []*corev1.Secret
 }
@@ -93,6 +97,9 @@ func getEncryptionState(encryptionSecrets []*corev1.Secret, validGRs map[schema.
 		}
 
 		grState := encryptionState[gr]
+
+		// TODO fix
+		grState.secrets = append(grState.secrets, encryptionSecret)
 
 		// always append to read keys since we do not know which key is the current write key until the end
 		grState.readKeys = append(grState.readKeys, key)
@@ -261,4 +268,48 @@ func getEncryptionConfig(secrets corev1client.SecretInterface, revision string) 
 		return nil, fmt.Errorf("encryption config has wrong type %T", encryptionConfigObj)
 	}
 	return encryptionConfig, nil
+}
+
+type actualKeys struct {
+	writeKey apiserverconfigv1.Key
+	readKeys []apiserverconfigv1.Key
+}
+
+func getGRsActualKeys(encryptionConfig *apiserverconfigv1.EncryptionConfiguration) map[schema.GroupResource]actualKeys {
+	out := map[schema.GroupResource]actualKeys{}
+	for _, resourceConfig := range encryptionConfig.Resources {
+		if len(resourceConfig.Resources) == 0 || len(resourceConfig.Providers) < 2 {
+			continue // should never happen
+		}
+
+		gr := schema.ParseGroupResource(resourceConfig.Resources[0])
+		provider1 := resourceConfig.Providers[0]
+		provider2 := resourceConfig.Providers[1]
+
+		switch {
+		case provider1.AESCBC != nil && len(provider1.AESCBC.Keys) != 0:
+			out[gr] = actualKeys{
+				writeKey: provider1.AESCBC.Keys[0],
+				readKeys: provider1.AESCBC.Keys[1:],
+			}
+		case provider1.Identity != nil && provider2.AESCBC != nil && len(provider2.AESCBC.Keys) != 0:
+			out[gr] = actualKeys{
+				readKeys: provider2.AESCBC.Keys,
+			}
+		}
+	}
+	return out
+}
+
+func findSecretFromKey(key apiserverconfigv1.Key, secrets []*corev1.Secret, validGRs map[schema.GroupResource]bool) (*corev1.Secret, bool) {
+	for _, secret := range secrets {
+		_, k, _, ok := secretToKey(secret, validGRs)
+		if !ok {
+			continue
+		}
+		if k == key {
+			return secret, true
+		}
+	}
+	return nil, false
 }

@@ -127,6 +127,15 @@ func RunOperator(ctx *controllercmd.ControllerContext) error {
 		dynamicClient,
 	)
 
+	encryptionPodStateController := encryption.NewEncryptionPodStateController(
+		operatorclient.TargetNamespace,
+		operatorClient,
+		kubeInformersForNamespaces,
+		v1helpers.CachedSecretGetter(kubeClient.CoreV1(), kubeInformersForNamespaces),
+		ctx.EventRecorder,
+		validGRs,
+	)
+
 	targetConfigReconciler := targetconfigcontroller.NewTargetConfigController(
 		os.Getenv("IMAGE"),
 		os.Getenv("OPERATOR_IMAGE"),
@@ -208,6 +217,7 @@ func RunOperator(ctx *controllercmd.ControllerContext) error {
 	go encryptionStateController.Run(ctx.Done())
 	go encryptionPruneController.Run(ctx.Done())
 	go encryptionMigrationController.Run(ctx.Done())
+	go encryptionPodStateController.Run(ctx.Done())
 	go clusterOperatorStatus.Run(1, ctx.Done())
 	go certRotationController.Run(1, ctx.Done())
 
