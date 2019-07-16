@@ -172,9 +172,9 @@ func needsNewKey(grKeys keysState) (uint64, bool) {
 		return 0, true
 	}
 
-	// TODO clean up
+	// TODO clean up logic to get this
 	lastMigrated := grKeys.secretsMigratedYes[len(grKeys.secretsMigratedYes)-1]
-	keyID, _ := secretToKeyID(lastMigrated)
+	keyID, _ := secretToKeyID(lastMigrated) // TODO maybe store this
 
 	migrationTimestampStr := lastMigrated.Annotations[encryptionSecretMigratedTimestamp]
 	migrationTimestamp, err := time.Parse(time.RFC3339, migrationTimestampStr)

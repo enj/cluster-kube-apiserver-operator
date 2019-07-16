@@ -74,6 +74,7 @@ type keysState struct {
 	keys        []apiserverconfigv1.Key
 	secrets     []*corev1.Secret
 	keyToSecret map[apiserverconfigv1.Key]*corev1.Secret
+	secretToKey map[string]apiserverconfigv1.Key
 
 	secretsReadYes []*corev1.Secret
 	secretsReadNo  []*corev1.Secret
@@ -114,10 +115,16 @@ func getEncryptionState(encryptionSecrets []*corev1.Secret, validGRs map[schema.
 
 		grState.keys = append(grState.keys, key)
 		grState.secrets = append(grState.secrets, encryptionSecret)
+
 		if grState.keyToSecret == nil {
 			grState.keyToSecret = map[apiserverconfigv1.Key]*corev1.Secret{}
 		}
 		grState.keyToSecret[key] = encryptionSecret
+
+		if grState.secretToKey == nil {
+			grState.secretToKey = map[string]apiserverconfigv1.Key{}
+		}
+		grState.secretToKey[encryptionSecret.Name] = key
 
 		appendSecretPerAnnotationState(&grState.secretsReadYes, &grState.secretsReadNo, encryptionSecret, encryptionSecretReadTimestamp)
 		appendSecretPerAnnotationState(&grState.secretsWriteYes, &grState.secretsWriteNo, encryptionSecret, encryptionSecretWriteTimestamp)
@@ -189,7 +196,7 @@ func grKeysToDesiredKeys(grKeys keysState) desiredKeys {
 
 	desired.writeKey, desired.hasWriteKey = determineWriteKey(grKeys)
 
-	// read keys have a duplicate of the write key
+	// keys have a duplicate of the write key
 	// or there is no write key
 
 	// iterate in reverse to order the read keys in optimal order
@@ -205,7 +212,27 @@ func grKeysToDesiredKeys(grKeys keysState) desiredKeys {
 }
 
 func determineWriteKey(grKeys keysState) (apiserverconfigv1.Key, bool) {
-	// TODO
+	// first write that is not migrated
+	for _, writeYes := range grKeys.secretsWriteYes {
+		if len(writeYes.Annotations[encryptionSecretMigratedTimestamp]) == 0 {
+			return grKeys.secretToKey[writeYes.Name], true
+		}
+	}
+
+	// first read that is not write
+	for _, readYes := range grKeys.secretsReadYes {
+		if len(readYes.Annotations[encryptionSecretWriteTimestamp]) == 0 {
+			return grKeys.secretToKey[readYes.Name], true
+		}
+	}
+
+	// no key is transitioning so just use last migrated
+	if len(grKeys.secretsMigratedYes) > 0 {
+		lastMigrated := grKeys.secretsMigratedYes[len(grKeys.secretsMigratedYes)-1]
+		return grKeys.secretToKey[lastMigrated.Name], true
+	}
+
+	// no write key
 	return apiserverconfigv1.Key{}, false
 }
 
