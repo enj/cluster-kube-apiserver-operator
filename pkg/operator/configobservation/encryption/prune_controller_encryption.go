@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
@@ -64,15 +63,7 @@ func NewEncryptionPruneController(
 		validGRs: validGRs,
 	}
 
-	labelSelector, err := metav1.ParseToLabelSelector(encryptionSecretComponent + "=" + targetNamespace)
-	if err != nil {
-		panic(err) // coding error
-	}
-	componentSelector, err := metav1.LabelSelectorAsSelector(labelSelector)
-	if err != nil {
-		panic(err) // coding error
-	}
-	c.componentSelector = componentSelector
+	c.componentSelector = labelSelectorOrDie(encryptionSecretComponent + "=" + targetNamespace)
 
 	operatorClient.Informer().AddEventHandler(c.eventHandler())
 	kubeInformersForNamespaces.InformersFor(operatorclient.GlobalMachineSpecifiedConfigNamespace).Core().V1().Secrets().Informer().AddEventHandler(c.eventHandler())
@@ -121,11 +112,11 @@ func (c *EncryptionPruneController) handleEncryptionPrune() error {
 
 	var deleteErrs []error
 	for _, grKeys := range encryptionState {
-		deleteCount := len(grKeys.migratedSecrets) - 10 // TODO see SucceededRevisionLimit comment above
+		deleteCount := len(grKeys.secretsMigratedYes) - 10 // TODO see SucceededRevisionLimit comment above
 		if deleteCount <= 0 {
 			continue
 		}
-		for _, secret := range grKeys.migratedSecrets[:deleteCount] {
+		for _, secret := range grKeys.secretsMigratedYes[:deleteCount] {
 			deleteErrs = append(deleteErrs, c.secretClient.Delete(secret.Name, nil))
 		}
 	}

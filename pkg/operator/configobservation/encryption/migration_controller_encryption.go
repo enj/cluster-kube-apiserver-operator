@@ -132,17 +132,10 @@ func (c *EncryptionMigrationController) sync() error {
 }
 
 func (c *EncryptionMigrationController) handleEncryptionMigration() (error, bool) {
-	encryptionSecrets, err := c.secretLister.Secrets(operatorclient.GlobalMachineSpecifiedConfigNamespace).List(c.componentSelector)
-	if err != nil {
-		return err, false
-	}
-
-	encryptionState := getEncryptionState(encryptionSecrets, c.validGRs)
-
 	// no storage migration during revision changes
 	revision, err := getRevision(c.podLister)
 	if err != nil || len(revision) == 0 {
-		return err, false
+		return err, err == nil
 	}
 
 	encryptionConfig, err := getEncryptionConfig(c.secretClient.Secrets(c.targetNamespace), revision)
@@ -150,6 +143,14 @@ func (c *EncryptionMigrationController) handleEncryptionMigration() (error, bool
 		return err, false
 	}
 
+	encryptionSecrets, err := c.secretLister.Secrets(operatorclient.GlobalMachineSpecifiedConfigNamespace).List(c.componentSelector)
+	if err != nil {
+		return err, false
+	}
+
+	encryptionState := getEncryptionState(encryptionSecrets, c.validGRs)
+
+	// TODO we need this check?  Could it dead lock?
 	// no storage migration until all masters catch up with revision
 	if !reflect.DeepEqual(encryptionConfig.Resources, getResourceConfigs(encryptionState)) {
 		return fmt.Errorf("resource config not in sync"), false // TODO maybe synthetic retry
@@ -157,26 +158,23 @@ func (c *EncryptionMigrationController) handleEncryptionMigration() (error, bool
 
 	// now we can attempt migration
 	var errs []error
-	for gr, grKeys := range encryptionState {
-		if len(grKeys.unmigratedSecrets) == 0 {
-			continue
+	for gr, grActualKeys := range getGRsActualKeys(encryptionConfig) {
+		if !grActualKeys.hasWriteKey {
+			continue // no write key to migrate to
 		}
+
+		writeSecret, ok := findSecretFromKey(grActualKeys.writeKey, encryptionState[gr].secretsMigratedNo, c.validGRs)
+		if !ok {
+			continue // no migration needed
+		}
+
 		migrationErr := c.runStorageMigration(gr)
 		errs = append(errs, migrationErr)
 		if migrationErr != nil {
 			continue
 		}
-		now := time.Now().Format(time.RFC3339)
-		for _, unmigratedSecret := range grKeys.unmigratedSecrets {
-			// if len(unmigratedSecret.Annotations[encryptionSecretMigrationJob]) > 0 {}
-			unmigratedSecretCopy := unmigratedSecret.DeepCopy()
-			if unmigratedSecretCopy.Annotations == nil {
-				unmigratedSecretCopy.Annotations = map[string]string{}
-			}
-			unmigratedSecretCopy.Annotations[encryptionSecretMigrationTimestamp] = now
-			_, updateErr := c.secretClient.Secrets(operatorclient.GlobalMachineSpecifiedConfigNamespace).Update(unmigratedSecretCopy)
-			errs = append(errs, updateErr)
-		}
+
+		errs = append(errs, setSecretAnnotation(c.secretClient, c.eventRecorder, writeSecret, encryptionSecretMigratedTimestamp))
 	}
 	return utilerrors.NewAggregate(errs), false
 }

@@ -6,7 +6,10 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
+	"github.com/openshift/library-go/pkg/operator/events"
+	"github.com/openshift/library-go/pkg/operator/resource/resourceapply"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
@@ -38,7 +41,7 @@ const (
 
 // annotations used to mark the current state of the secret
 const (
-	encryptionSecretMigrationTimestamp = "encryption.operator.openshift.io/migration-timestamp"
+	encryptionSecretMigratedTimestamp = "encryption.operator.openshift.io/migrated-timestamp"
 	// encryptionSecretMigrationJob       = "encryption.operator.openshift.io/migration-job"
 
 	encryptionSecretReadTimestamp  = "encryption.operator.openshift.io/read-timestamp"
@@ -74,7 +77,17 @@ type keys struct {
 
 	readKeys []apiserverconfigv1.Key
 
-	secrets           []*corev1.Secret
+	secrets []*corev1.Secret
+
+	secretsReadYes []*corev1.Secret
+	secretsReadNo  []*corev1.Secret
+
+	secretsWriteYes []*corev1.Secret
+	secretsWriteNo  []*corev1.Secret
+
+	secretsMigratedYes []*corev1.Secret
+	secretsMigratedNo  []*corev1.Secret
+
 	migratedSecrets   []*corev1.Secret
 	unmigratedSecrets []*corev1.Secret
 }
@@ -98,13 +111,16 @@ func getEncryptionState(encryptionSecrets []*corev1.Secret, validGRs map[schema.
 
 		grState := encryptionState[gr]
 
-		// TODO fix
+		// TODO fix to be more targeted
 		grState.secrets = append(grState.secrets, encryptionSecret)
+		appendSecretPerAnnotationState(&grState.secretsReadYes, &grState.secretsReadNo, encryptionSecret, encryptionSecretReadTimestamp)
+		appendSecretPerAnnotationState(&grState.secretsWriteYes, &grState.secretsWriteNo, encryptionSecret, encryptionSecretWriteTimestamp)
+		appendSecretPerAnnotationState(&grState.secretsMigratedYes, &grState.secretsMigratedNo, encryptionSecret, encryptionSecretMigratedTimestamp)
 
 		// always append to read keys since we do not know which key is the current write key until the end
 		grState.readKeys = append(grState.readKeys, key)
 		// keep overwriting the write key with the latest key that has been migrated to
-		if len(encryptionSecret.Annotations[encryptionSecretMigrationTimestamp]) > 0 {
+		if len(encryptionSecret.Annotations[encryptionSecretMigratedTimestamp]) > 0 {
 			grState.desiredWriteKey = key
 			grState.desiredWriteKeyID = keyID
 			grState.desiredWriteKeySecret = encryptionSecret
@@ -117,6 +133,14 @@ func getEncryptionState(encryptionSecrets []*corev1.Secret, validGRs map[schema.
 	}
 
 	return encryptionState
+}
+
+func appendSecretPerAnnotationState(in, out *[]*corev1.Secret, secret *corev1.Secret, annotation string) {
+	if len(secret.Annotations[annotation]) != 0 {
+		*in = append(*in, secret)
+	} else {
+		*out = append(*out, secret)
+	}
 }
 
 func secretToKey(encryptionSecret *corev1.Secret, validGRs map[schema.GroupResource]bool) (schema.GroupResource, apiserverconfigv1.Key, uint64, bool) {
@@ -271,8 +295,9 @@ func getEncryptionConfig(secrets corev1client.SecretInterface, revision string) 
 }
 
 type actualKeys struct {
-	writeKey apiserverconfigv1.Key
-	readKeys []apiserverconfigv1.Key
+	hasWriteKey bool
+	writeKey    apiserverconfigv1.Key
+	readKeys    []apiserverconfigv1.Key
 }
 
 func getGRsActualKeys(encryptionConfig *apiserverconfigv1.EncryptionConfiguration) map[schema.GroupResource]actualKeys {
@@ -289,8 +314,9 @@ func getGRsActualKeys(encryptionConfig *apiserverconfigv1.EncryptionConfiguratio
 		switch {
 		case provider1.AESCBC != nil && len(provider1.AESCBC.Keys) != 0:
 			out[gr] = actualKeys{
-				writeKey: provider1.AESCBC.Keys[0],
-				readKeys: provider1.AESCBC.Keys[1:],
+				hasWriteKey: true,
+				writeKey:    provider1.AESCBC.Keys[0],
+				readKeys:    provider1.AESCBC.Keys[1:],
 			}
 		case provider1.Identity != nil && provider2.AESCBC != nil && len(provider2.AESCBC.Keys) != 0:
 			out[gr] = actualKeys{
@@ -312,4 +338,19 @@ func findSecretFromKey(key apiserverconfigv1.Key, secrets []*corev1.Secret, vali
 		}
 	}
 	return nil, false
+}
+
+func setSecretAnnotation(secretClient corev1client.SecretsGetter, recorder events.Recorder, secret *corev1.Secret, annotation string) error {
+	if len(secret.Annotations[annotation]) != 0 {
+		return nil
+	}
+	secret = secret.DeepCopy()
+
+	if secret.Annotations == nil {
+		secret.Annotations = map[string]string{}
+	}
+	secret.Annotations[annotation] = time.Now().Format(time.RFC3339)
+
+	_, _, updateErr := resourceapply.ApplySecret(secretClient, recorder, secret)
+	return updateErr // let conflict errors for a retry
 }

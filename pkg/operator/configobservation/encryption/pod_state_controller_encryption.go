@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"time"
 
-	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
@@ -54,7 +53,7 @@ func NewEncryptionPodStateController(
 ) *EncryptionPodStateController {
 	c := &EncryptionPodStateController{
 		operatorClient: operatorClient,
-		eventRecorder:  eventRecorder.WithComponentSuffix("encryption-pod-state-controller"), // TODO unused
+		eventRecorder:  eventRecorder.WithComponentSuffix("encryption-pod-state-controller"),
 
 		queue: workqueue.NewNamedRateLimitingQueue(workqueue.DefaultControllerRateLimiter(), "EncryptionPodStateController"),
 
@@ -145,7 +144,9 @@ func (c *EncryptionPodStateController) handleEncryptionPodState() (error, bool) 
 	// now we can attempt to annotate based on current pod state
 	var errs []error
 	for gr, grActualKeys := range getGRsActualKeys(encryptionConfig) {
-		secrets := encryptionState[gr].secrets // TODO fix to look at a smaller subset
+		// TODO fix to look at a smaller subset
+		// the continue / possibly progressing logic would get messy below
+		secrets := encryptionState[gr].secrets
 
 		for _, readKey := range grActualKeys.readKeys {
 			readSecret, ok := findSecretFromKey(readKey, secrets, c.validGRs)
@@ -154,7 +155,11 @@ func (c *EncryptionPodStateController) handleEncryptionPodState() (error, bool) 
 				errs = append(errs, fmt.Errorf("failed to find read secret for key %s in %s", readKey.Name, gr))
 				continue
 			}
-			errs = append(errs, c.setAnnotation(readSecret, encryptionSecretReadTimestamp))
+			errs = append(errs, setSecretAnnotation(c.secretClient, c.eventRecorder, readSecret, encryptionSecretReadTimestamp))
+		}
+
+		if !grActualKeys.hasWriteKey {
+			continue
 		}
 
 		writeSecret, ok := findSecretFromKey(grActualKeys.writeKey, secrets, c.validGRs)
@@ -163,24 +168,9 @@ func (c *EncryptionPodStateController) handleEncryptionPodState() (error, bool) 
 			errs = append(errs, fmt.Errorf("failed to find write secret for key %s in %s", grActualKeys.writeKey.Name, gr))
 			continue
 		}
-		errs = append(errs, c.setAnnotation(writeSecret, encryptionSecretWriteTimestamp))
+		errs = append(errs, setSecretAnnotation(c.secretClient, c.eventRecorder, writeSecret, encryptionSecretWriteTimestamp))
 	}
 	return utilerrors.NewAggregate(errs), false
-}
-
-func (c *EncryptionPodStateController) setAnnotation(secret *corev1.Secret, annotation string) error {
-	if len(secret.Annotations[annotation]) != 0 {
-		return nil
-	}
-	secret = secret.DeepCopy()
-
-	if secret.Annotations == nil {
-		secret.Annotations = map[string]string{}
-	}
-	secret.Annotations[annotation] = time.Now().Format(time.RFC3339)
-
-	_, updateErr := c.secretClient.Secrets(operatorclient.GlobalMachineSpecifiedConfigNamespace).Update(secret)
-	return updateErr // let conflict errors for a retry
 }
 
 func (c *EncryptionPodStateController) Run(stopCh <-chan struct{}) {

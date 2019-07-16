@@ -69,15 +69,7 @@ func NewEncryptionKeyController(
 		componentName: targetNamespace,
 	}
 
-	labelSelector, err := metav1.ParseToLabelSelector(encryptionSecretComponent + "=" + targetNamespace)
-	if err != nil {
-		panic(err) // coding error
-	}
-	componentSelector, err := metav1.LabelSelectorAsSelector(labelSelector)
-	if err != nil {
-		panic(err) // coding error
-	}
-	c.componentSelector = componentSelector
+	c.componentSelector = labelSelectorOrDie(encryptionSecretComponent + "=" + targetNamespace)
 
 	operatorClient.Informer().AddEventHandler(c.eventHandler())
 	kubeInformersForNamespaces.InformersFor(operatorclient.GlobalMachineSpecifiedConfigNamespace).Core().V1().Secrets().Informer().AddEventHandler(c.eventHandler())
@@ -143,6 +135,7 @@ func (c *EncryptionKeyController) handleEncryptionKey() error {
 				continue // we made this key earlier and our lister has not caught up
 			}
 			// delete the invalid secret so we do not get stuck
+			// TODO or we can just get stuck in degraded ?
 			errs = append(errs, c.secretClient.Delete(keySecret.Name, nil))
 		}
 		errs = append(errs, createErr)
@@ -167,6 +160,35 @@ func (c *EncryptionKeyController) generateKeySecret(gr schema.GroupResource, key
 			encryptionSecretKeyData: newAES256Key(),
 		},
 	}
+}
+
+func needsNewKey(grKeys keys) bool {
+	if len(grKeys.secretsMigratedNo) > 0 {
+		return false
+	}
+
+	if len(grKeys.secrets) == 0 {
+		return true
+	}
+
+	// TODO clean up
+	writeSecret := grKeys.secretsMigratedYes[len(grKeys.secretsMigratedYes)-1]
+
+	migrationTimestampStr := writeSecret.Annotations[encryptionSecretMigratedTimestamp]
+	migrationTimestamp, err := time.Parse(time.RFC3339, migrationTimestampStr)
+	if err != nil {
+		return true // eh?
+	}
+
+	return time.Now().After(migrationTimestamp.Add(30 * time.Minute)) // TODO how often?
+}
+
+func newAES256Key() []byte {
+	b := make([]byte, 32) // AES-256 == 32 byte key
+	if _, err := rand.Read(b); err != nil {
+		panic(err) // rand should never fail
+	}
+	return b
 }
 
 func (c *EncryptionKeyController) Run(stopCh <-chan struct{}) {
@@ -216,30 +238,4 @@ func (c *EncryptionKeyController) eventHandler() cache.ResourceEventHandler {
 		UpdateFunc: func(old, new interface{}) { c.queue.Add(encWorkKey) },
 		DeleteFunc: func(obj interface{}) { c.queue.Add(encWorkKey) },
 	}
-}
-
-func needsNewKey(grKeys keys) bool {
-	if len(grKeys.unmigratedSecrets) > 0 {
-		return false
-	}
-
-	if len(grKeys.unmigratedSecrets) == 0 && len(grKeys.migratedSecrets) == 0 {
-		return true
-	}
-
-	migrationTimestampStr := grKeys.desiredWriteKeySecret.Annotations[encryptionSecretMigrationTimestamp]
-	migrationTimestamp, err := time.Parse(time.RFC3339, migrationTimestampStr)
-	if err != nil {
-		return true // eh?
-	}
-
-	return time.Now().After(migrationTimestamp.Add(30 * time.Minute)) // TODO how often?
-}
-
-func newAES256Key() []byte {
-	b := make([]byte, 32) // AES-256 == 32 byte key
-	if _, err := rand.Read(b); err != nil {
-		panic(err) // rand should never fail
-	}
-	return b
 }
