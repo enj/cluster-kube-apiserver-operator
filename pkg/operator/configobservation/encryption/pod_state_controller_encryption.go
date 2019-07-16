@@ -144,12 +144,10 @@ func (c *EncryptionPodStateController) handleEncryptionPodState() (error, bool) 
 	// now we can attempt to annotate based on current pod state
 	var errs []error
 	for gr, grActualKeys := range getGRsActualKeys(encryptionConfig) {
-		// TODO fix to look at a smaller subset
-		// the continue / possibly progressing logic would get messy below
-		secrets := encryptionState[gr].secrets
+		keyToSecret := encryptionState[gr].keyToSecret
 
 		for _, readKey := range grActualKeys.readKeys {
-			readSecret, ok := findSecretFromKey(readKey, secrets, c.validGRs)
+			readSecret, ok := keyToSecret[readKey]
 			if !ok {
 				// TODO may do not error and just set progressing ?
 				errs = append(errs, fmt.Errorf("failed to find read secret for key %s in %s", readKey.Name, gr))
@@ -162,7 +160,7 @@ func (c *EncryptionPodStateController) handleEncryptionPodState() (error, bool) 
 			continue
 		}
 
-		writeSecret, ok := findSecretFromKey(grActualKeys.writeKey, secrets, c.validGRs)
+		writeSecret, ok := keyToSecret[grActualKeys.writeKey]
 		if !ok {
 			// TODO may do not error and just set progressing ?
 			errs = append(errs, fmt.Errorf("failed to find write secret for key %s in %s", grActualKeys.writeKey.Name, gr))

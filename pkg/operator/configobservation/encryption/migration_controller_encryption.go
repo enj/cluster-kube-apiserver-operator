@@ -163,8 +163,8 @@ func (c *EncryptionMigrationController) handleEncryptionMigration() (error, bool
 			continue // no write key to migrate to
 		}
 
-		writeSecret, ok := findSecretFromKey(grActualKeys.writeKey, encryptionState[gr].secretsMigratedNo, c.validGRs)
-		if !ok {
+		writeSecret, ok := encryptionState[gr].keyToSecret[grActualKeys.writeKey]
+		if !ok || len(writeSecret.Annotations[encryptionSecretMigratedTimestamp]) != 0 {
 			continue // no migration needed
 		}
 

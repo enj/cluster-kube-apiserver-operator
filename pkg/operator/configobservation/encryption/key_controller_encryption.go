@@ -116,17 +116,18 @@ func (c *EncryptionKeyController) handleEncryptionKey() error {
 	// make sure we look for all resources that we are managing
 	for gr := range c.validGRs {
 		if _, ok := encryptionState[gr]; !ok {
-			encryptionState[gr] = keys{}
+			encryptionState[gr] = keysState{}
 		}
 	}
 
 	var errs []error
 	for gr, grKeys := range encryptionState {
-		if !needsNewKey(grKeys) {
+		keyID, ok := needsNewKey(grKeys)
+		if !ok {
 			continue
 		}
 
-		nextKeyID := grKeys.desiredWriteKeyID + 1
+		nextKeyID := keyID + 1
 		keySecret := c.generateKeySecret(gr, nextKeyID)
 		actualKeySecret, createErr := c.secretClient.Create(keySecret)
 		if errors.IsAlreadyExists(createErr) {
@@ -162,25 +163,26 @@ func (c *EncryptionKeyController) generateKeySecret(gr schema.GroupResource, key
 	}
 }
 
-func needsNewKey(grKeys keys) bool {
+func needsNewKey(grKeys keysState) (uint64, bool) {
 	if len(grKeys.secretsMigratedNo) > 0 {
-		return false
+		return 0, false
 	}
 
 	if len(grKeys.secrets) == 0 {
-		return true
+		return 0, true
 	}
 
 	// TODO clean up
-	writeSecret := grKeys.secretsMigratedYes[len(grKeys.secretsMigratedYes)-1]
+	lastMigrated := grKeys.secretsMigratedYes[len(grKeys.secretsMigratedYes)-1]
+	keyID, _ := secretToKeyID(lastMigrated)
 
-	migrationTimestampStr := writeSecret.Annotations[encryptionSecretMigratedTimestamp]
+	migrationTimestampStr := lastMigrated.Annotations[encryptionSecretMigratedTimestamp]
 	migrationTimestamp, err := time.Parse(time.RFC3339, migrationTimestampStr)
 	if err != nil {
-		return true // eh?
+		return keyID, true // eh?
 	}
 
-	return time.Now().After(migrationTimestamp.Add(30 * time.Minute)) // TODO how often?
+	return keyID, time.Now().After(migrationTimestamp.Add(30 * time.Minute)) // TODO how often?
 }
 
 func newAES256Key() []byte {

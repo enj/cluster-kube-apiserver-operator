@@ -69,15 +69,11 @@ func init() {
 	decoder = codecs.UniversalDecoder(apiserverconfigv1.SchemeGroupVersion)
 }
 
-type groupResourcesState map[schema.GroupResource]keys
-type keys struct {
-	desiredWriteKey       apiserverconfigv1.Key
-	desiredWriteKeyID     uint64
-	desiredWriteKeySecret *corev1.Secret
-
-	readKeys []apiserverconfigv1.Key
-
-	secrets []*corev1.Secret
+type groupResourcesState map[schema.GroupResource]keysState
+type keysState struct {
+	keys        []apiserverconfigv1.Key
+	secrets     []*corev1.Secret
+	keyToSecret map[apiserverconfigv1.Key]*corev1.Secret
 
 	secretsReadYes []*corev1.Secret
 	secretsReadNo  []*corev1.Secret
@@ -87,9 +83,12 @@ type keys struct {
 
 	secretsMigratedYes []*corev1.Secret
 	secretsMigratedNo  []*corev1.Secret
+}
 
-	migratedSecrets   []*corev1.Secret
-	unmigratedSecrets []*corev1.Secret
+type desiredKeys struct {
+	hasWriteKey bool
+	writeKey    apiserverconfigv1.Key
+	readKeys    []apiserverconfigv1.Key
 }
 
 func getEncryptionState(encryptionSecrets []*corev1.Secret, validGRs map[schema.GroupResource]bool) groupResourcesState {
@@ -103,7 +102,7 @@ func getEncryptionState(encryptionSecrets []*corev1.Secret, validGRs map[schema.
 	encryptionState := groupResourcesState{}
 
 	for _, encryptionSecret := range encryptionSecrets {
-		gr, key, keyID, ok := secretToKey(encryptionSecret, validGRs)
+		gr, key, _, ok := secretToKey(encryptionSecret, validGRs)
 		if !ok {
 			klog.Infof("skipping encryption secret %s as it has invalid data", encryptionSecret.Name)
 			continue
@@ -111,23 +110,18 @@ func getEncryptionState(encryptionSecrets []*corev1.Secret, validGRs map[schema.
 
 		grState := encryptionState[gr]
 
-		// TODO fix to be more targeted
+		// TODO figure out which lists can be dropped, maps may be better in some places
+
+		grState.keys = append(grState.keys, key)
 		grState.secrets = append(grState.secrets, encryptionSecret)
+		if grState.keyToSecret == nil {
+			grState.keyToSecret = map[apiserverconfigv1.Key]*corev1.Secret{}
+		}
+		grState.keyToSecret[key] = encryptionSecret
+
 		appendSecretPerAnnotationState(&grState.secretsReadYes, &grState.secretsReadNo, encryptionSecret, encryptionSecretReadTimestamp)
 		appendSecretPerAnnotationState(&grState.secretsWriteYes, &grState.secretsWriteNo, encryptionSecret, encryptionSecretWriteTimestamp)
 		appendSecretPerAnnotationState(&grState.secretsMigratedYes, &grState.secretsMigratedNo, encryptionSecret, encryptionSecretMigratedTimestamp)
-
-		// always append to read keys since we do not know which key is the current write key until the end
-		grState.readKeys = append(grState.readKeys, key)
-		// keep overwriting the write key with the latest key that has been migrated to
-		if len(encryptionSecret.Annotations[encryptionSecretMigratedTimestamp]) > 0 {
-			grState.desiredWriteKey = key
-			grState.desiredWriteKeyID = keyID
-			grState.desiredWriteKeySecret = encryptionSecret
-			grState.migratedSecrets = append(grState.migratedSecrets, encryptionSecret)
-		} else {
-			grState.unmigratedSecrets = append(grState.unmigratedSecrets, encryptionSecret)
-		}
 
 		encryptionState[gr] = grState
 	}
@@ -190,25 +184,39 @@ func getResourceConfigs(encryptionState groupResourcesState) []apiserverconfigv1
 	return resourceConfigs
 }
 
-func keysToProviders(grKeys keys) []apiserverconfigv1.ProviderConfiguration {
-	hasWriteKey := len(grKeys.desiredWriteKey.Secret) != 0
+func grKeysToDesiredKeys(grKeys keysState) desiredKeys {
+	desired := desiredKeys{}
+
+	desired.writeKey, desired.hasWriteKey = determineWriteKey(grKeys)
 
 	// read keys have a duplicate of the write key
 	// or there is no write key
-	allKeys := make([]apiserverconfigv1.Key, 0, len(grKeys.readKeys))
-
-	// write key comes first
-	if hasWriteKey {
-		allKeys = append(allKeys, grKeys.desiredWriteKey)
-	}
 
 	// iterate in reverse to order the read keys in optimal order
-	for i := len(grKeys.readKeys) - 1; i >= 0; i-- {
-		readKey := grKeys.readKeys[i]
-		if readKey.Name == grKeys.desiredWriteKey.Name {
+	for i := len(grKeys.keys) - 1; i >= 0; i-- {
+		readKey := grKeys.keys[i]
+		if desired.hasWriteKey && readKey == desired.writeKey {
 			continue // if present, drop the duplicate write key from the list
 		}
-		allKeys = append(allKeys, readKey)
+		desired.readKeys = append(desired.readKeys, readKey)
+	}
+
+	return desired
+}
+
+func determineWriteKey(grKeys keysState) (apiserverconfigv1.Key, bool) {
+	// TODO
+	return apiserverconfigv1.Key{}, false
+}
+
+func keysToProviders(grKeys keysState) []apiserverconfigv1.ProviderConfiguration {
+	desired := grKeysToDesiredKeys(grKeys)
+
+	allKeys := desired.readKeys
+
+	// write key comes first
+	if desired.hasWriteKey {
+		allKeys = append([]apiserverconfigv1.Key{desired.writeKey}, allKeys...)
 	}
 
 	aescbc := apiserverconfigv1.ProviderConfiguration{
@@ -223,7 +231,7 @@ func keysToProviders(grKeys keys) []apiserverconfigv1.ProviderConfiguration {
 	// assume the common case of having a write key so identity comes last
 	providers := []apiserverconfigv1.ProviderConfiguration{aescbc, identity}
 	// if we have no write key, identity comes first
-	if !hasWriteKey {
+	if !desired.hasWriteKey {
 		providers = []apiserverconfigv1.ProviderConfiguration{identity, aescbc}
 	}
 
@@ -325,19 +333,6 @@ func getGRsActualKeys(encryptionConfig *apiserverconfigv1.EncryptionConfiguratio
 		}
 	}
 	return out
-}
-
-func findSecretFromKey(key apiserverconfigv1.Key, secrets []*corev1.Secret, validGRs map[schema.GroupResource]bool) (*corev1.Secret, bool) {
-	for _, secret := range secrets {
-		_, k, _, ok := secretToKey(secret, validGRs)
-		if !ok {
-			continue
-		}
-		if k == key {
-			return secret, true
-		}
-	}
-	return nil, false
 }
 
 func setSecretAnnotation(secretClient corev1client.SecretsGetter, recorder events.Recorder, secret *corev1.Secret, annotation string) error {
