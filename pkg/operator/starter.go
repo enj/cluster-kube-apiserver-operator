@@ -104,6 +104,7 @@ func RunOperator(ctx *controllercmd.ControllerContext) error {
 		operatorClient,
 		kubeInformersForNamespaces,
 		v1helpers.CachedSecretGetter(kubeClient.CoreV1(), kubeInformersForNamespaces),
+		kubeClient.CoreV1(),
 		ctx.EventRecorder,
 		validGRs,
 	)
@@ -122,6 +123,7 @@ func RunOperator(ctx *controllercmd.ControllerContext) error {
 		operatorClient,
 		kubeInformersForNamespaces,
 		v1helpers.CachedSecretGetter(kubeClient.CoreV1(), kubeInformersForNamespaces),
+		kubeClient.CoreV1(),
 		ctx.EventRecorder,
 		validGRs,
 		dynamicClient,
@@ -132,6 +134,7 @@ func RunOperator(ctx *controllercmd.ControllerContext) error {
 		operatorClient,
 		kubeInformersForNamespaces,
 		v1helpers.CachedSecretGetter(kubeClient.CoreV1(), kubeInformersForNamespaces),
+		kubeClient.CoreV1(),
 		ctx.EventRecorder,
 		validGRs,
 	)

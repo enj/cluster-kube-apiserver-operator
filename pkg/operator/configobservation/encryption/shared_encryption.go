@@ -21,7 +21,6 @@ import (
 	apiserverconfig "k8s.io/apiserver/pkg/apis/config"
 	apiserverconfigv1 "k8s.io/apiserver/pkg/apis/config/v1"
 	corev1client "k8s.io/client-go/kubernetes/typed/core/v1"
-	corev1listers "k8s.io/client-go/listers/core/v1"
 	"k8s.io/klog"
 
 	"github.com/openshift/library-go/pkg/operator/management"
@@ -286,21 +285,23 @@ func labelSelectorOrDie(label string) labels.Selector {
 	return componentSelector
 }
 
-func getRevision(podLister corev1listers.PodNamespaceLister) (string, error) {
-	apiServerPods, err := podLister.List(labelSelectorOrDie("apiserver=true"))
+func getRevision(podClient corev1client.PodInterface) (string, error) {
+	// do a live list so we never get confused about what revision we are on
+	apiServerPods, err := podClient.List(metav1.ListOptions{LabelSelector: "apiserver=true"})
 	if err != nil {
 		return "", err
 	}
 
 	revisions := sets.NewString()
-	for _, apiServerPod := range apiServerPods {
+	for _, apiServerPod := range apiServerPods.Items {
 		switch apiServerPod.Status.Phase {
-		case corev1.PodRunning, corev1.PodPending:
-			for _, condition := range apiServerPod.Status.Conditions {
-				if condition.Type == corev1.PodReady && condition.Status == corev1.ConditionTrue {
-					revisions.Insert(apiServerPod.Labels[revisionLabel])
-				}
+		case corev1.PodRunning:
+			if !isPodReady(apiServerPod) {
+				return "", nil // pods are not fully ready
 			}
+			revisions.Insert(apiServerPod.Labels[revisionLabel])
+		case corev1.PodPending, corev1.PodUnknown:
+			return "", nil // pods are not fully ready
 		}
 	}
 
@@ -309,6 +310,15 @@ func getRevision(podLister corev1listers.PodNamespaceLister) (string, error) {
 	}
 	revision, _ := revisions.PopAny()
 	return revision, nil
+}
+
+func isPodReady(pod corev1.Pod) bool {
+	for _, condition := range pod.Status.Conditions {
+		if condition.Type == corev1.PodReady && condition.Status == corev1.ConditionTrue {
+			return true
+		}
+	}
+	return false
 }
 
 func getEncryptionConfig(secrets corev1client.SecretInterface, revision string) (*apiserverconfigv1.EncryptionConfiguration, error) {

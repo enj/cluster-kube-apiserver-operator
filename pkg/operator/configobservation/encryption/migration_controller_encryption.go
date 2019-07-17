@@ -44,7 +44,7 @@ type EncryptionMigrationController struct {
 	secretLister corev1listers.SecretLister
 	secretClient corev1client.SecretsGetter
 
-	podLister corev1listers.PodNamespaceLister
+	podClient corev1client.PodInterface
 
 	dynamicClient dynamic.Interface
 }
@@ -54,6 +54,7 @@ func NewEncryptionMigrationController(
 	operatorClient operatorv1helpers.StaticPodOperatorClient,
 	kubeInformersForNamespaces operatorv1helpers.KubeInformersForNamespaces,
 	secretClient corev1client.SecretsGetter,
+	podClient corev1client.PodsGetter,
 	eventRecorder events.Recorder,
 	validGRs map[schema.GroupResource]bool,
 	dynamicClient dynamic.Interface, // temporary hack
@@ -85,7 +86,7 @@ func NewEncryptionMigrationController(
 
 	c.secretLister = kubeInformersForNamespaces.InformersFor("").Core().V1().Secrets().Lister()
 	c.secretClient = secretClient
-	c.podLister = kubeInformersForNamespaces.InformersFor(targetNamespace).Core().V1().Pods().Lister().Pods(targetNamespace)
+	c.podClient = podClient.Pods(targetNamespace)
 	c.dynamicClient = dynamicClient
 
 	return c
@@ -132,7 +133,7 @@ func (c *EncryptionMigrationController) sync() error {
 
 func (c *EncryptionMigrationController) handleEncryptionMigration() (error, bool) {
 	// no storage migration during revision changes
-	revision, err := getRevision(c.podLister)
+	revision, err := getRevision(c.podClient)
 	if err != nil || len(revision) == 0 {
 		return err, err == nil
 	}

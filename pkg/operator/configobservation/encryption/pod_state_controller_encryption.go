@@ -40,7 +40,7 @@ type EncryptionPodStateController struct {
 	secretLister corev1listers.SecretLister
 	secretClient corev1client.SecretsGetter
 
-	podLister corev1listers.PodNamespaceLister
+	podClient corev1client.PodInterface
 }
 
 func NewEncryptionPodStateController(
@@ -48,6 +48,7 @@ func NewEncryptionPodStateController(
 	operatorClient operatorv1helpers.StaticPodOperatorClient,
 	kubeInformersForNamespaces operatorv1helpers.KubeInformersForNamespaces,
 	secretClient corev1client.SecretsGetter,
+	podClient corev1client.PodsGetter,
 	eventRecorder events.Recorder,
 	validGRs map[schema.GroupResource]bool,
 ) *EncryptionPodStateController {
@@ -78,7 +79,7 @@ func NewEncryptionPodStateController(
 
 	c.secretLister = kubeInformersForNamespaces.InformersFor("").Core().V1().Secrets().Lister()
 	c.secretClient = secretClient
-	c.podLister = kubeInformersForNamespaces.InformersFor(targetNamespace).Core().V1().Pods().Lister().Pods(targetNamespace)
+	c.podClient = podClient.Pods(targetNamespace)
 
 	return c
 }
@@ -124,7 +125,7 @@ func (c *EncryptionPodStateController) sync() error {
 
 func (c *EncryptionPodStateController) handleEncryptionPodState() (error, bool) {
 	// we need a stable view of the world
-	revision, err := getRevision(c.podLister)
+	revision, err := getRevision(c.podClient)
 	if err != nil || len(revision) == 0 {
 		return err, err == nil
 	}

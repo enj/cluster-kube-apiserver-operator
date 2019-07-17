@@ -45,7 +45,7 @@ type EncryptionStateController struct {
 	secretLister corev1listers.SecretLister
 	secretClient corev1client.SecretsGetter
 
-	podLister corev1listers.PodNamespaceLister
+	podClient corev1client.PodInterface
 }
 
 func NewEncryptionStateController(
@@ -53,6 +53,7 @@ func NewEncryptionStateController(
 	operatorClient operatorv1helpers.StaticPodOperatorClient,
 	kubeInformersForNamespaces operatorv1helpers.KubeInformersForNamespaces,
 	secretClient corev1client.SecretsGetter,
+	podClient corev1client.PodsGetter,
 	eventRecorder events.Recorder,
 	validGRs map[schema.GroupResource]bool,
 ) *EncryptionStateController {
@@ -84,7 +85,7 @@ func NewEncryptionStateController(
 
 	c.secretLister = kubeInformersForNamespaces.InformersFor("").Core().V1().Secrets().Lister()
 	c.secretClient = secretClient
-	c.podLister = kubeInformersForNamespaces.InformersFor(targetNamespace).Core().V1().Pods().Lister().Pods(targetNamespace)
+	c.podClient = podClient.Pods(targetNamespace)
 
 	return c
 }
@@ -116,7 +117,7 @@ func (c *EncryptionStateController) sync() error {
 func (c *EncryptionStateController) handleEncryptionStateConfig() error {
 	// do not cause new revisions while old ones are rolling out
 	// TODO but does this even matter?
-	revision, err := getRevision(c.podLister)
+	revision, err := getRevision(c.podClient)
 	if err != nil || len(revision) == 0 {
 		return err
 	}
