@@ -16,7 +16,6 @@ import (
 	corev1client "k8s.io/client-go/kubernetes/typed/core/v1"
 	corev1listers "k8s.io/client-go/listers/core/v1"
 	"k8s.io/client-go/tools/cache"
-	"k8s.io/client-go/util/retry"
 	"k8s.io/client-go/util/workqueue"
 	"k8s.io/klog"
 
@@ -182,19 +181,16 @@ func (c *EncryptionMigrationController) handleEncryptionMigration() (error, bool
 func (c *EncryptionMigrationController) runStorageMigration(gr schema.GroupResource) error {
 	// TODO version hack
 	d := c.dynamicClient.Resource(gr.WithVersion("v1"))
-	unstructuredList, err := d.List(metav1.ListOptions{})
+	allResource, err := d.List(metav1.ListOptions{})
 	if err != nil {
 		return err
 	}
 	var errs []error
-	for _, obj := range unstructuredList.Items {
-		retryErr := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
-			_, updateErr := d.Update(&obj, metav1.UpdateOptions{})
-			return updateErr
-		})
-		errs = append(errs, retryErr)
+	for _, obj := range allResource.Items { // TODO parallelize for-loop
+		_, updateErr := d.Namespace(obj.GetNamespace()).Update(&obj, metav1.UpdateOptions{})
+		errs = append(errs, updateErr)
 	}
-	return utilerrors.FilterOut(utilerrors.NewAggregate(errs), errors.IsNotFound)
+	return utilerrors.FilterOut(utilerrors.NewAggregate(errs), errors.IsNotFound, errors.IsConflict)
 }
 
 func (c *EncryptionMigrationController) Run(stopCh <-chan struct{}) {
