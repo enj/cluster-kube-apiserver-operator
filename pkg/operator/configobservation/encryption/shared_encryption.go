@@ -374,5 +374,5 @@ func setSecretAnnotation(secretClient corev1client.SecretsGetter, recorder event
 	secret.Annotations[annotation] = time.Now().Format(time.RFC3339)
 
 	_, _, updateErr := resourceapply.ApplySecret(secretClient, recorder, secret)
-	return updateErr // let conflict errors for a retry
+	return updateErr // let conflict errors cause a retry
 }

@@ -129,15 +129,18 @@ func (c *EncryptionKeyController) handleEncryptionKey() error {
 
 		nextKeyID := keyID + 1
 		keySecret := c.generateKeySecret(gr, nextKeyID)
-		actualKeySecret, createErr := c.secretClient.Create(keySecret)
+		_, createErr := c.secretClient.Create(keySecret)
 		if errors.IsAlreadyExists(createErr) {
-			keyGR, _, keyID, ok := secretToKey(actualKeySecret, c.validGRs)
-			if valid := keyGR == gr && keyID == nextKeyID && ok; valid {
-				continue // we made this key earlier and our lister has not caught up
+			actualKeySecret, getErr := c.secretClient.Get(keySecret.Name, metav1.GetOptions{})
+			errs = append(errs, getErr)
+			if getErr == nil {
+				keyGR, _, actualKeyID, validKey := secretToKey(actualKeySecret, c.validGRs)
+				if valid := keyGR == gr && actualKeyID == nextKeyID && validKey; valid {
+					continue // we made this key earlier
+				}
+				// TODO we can just get stuck in degraded here ...
+				errs = append(errs, fmt.Errorf("%s secret %s is in invalid state, new keys cannot be created", gr, keySecret.Name))
 			}
-			// delete the invalid secret so we do not get stuck
-			// TODO or we can just get stuck in degraded ?
-			errs = append(errs, c.secretClient.Delete(keySecret.Name, nil))
 		}
 		errs = append(errs, createErr)
 	}
