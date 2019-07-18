@@ -112,7 +112,8 @@ func (c *EncryptionPruneController) handleEncryptionPrune() error {
 
 	var deleteErrs []error
 	for _, grKeys := range encryptionState {
-		deleteCount := len(grKeys.secretsMigratedYes) - 10 // TODO see SucceededRevisionLimit comment above
+		// TODO see SucceededRevisionLimit comment above, cannot exceed 100, see secretToKey func
+		deleteCount := len(grKeys.secretsMigratedYes) - 10
 		if deleteCount <= 0 {
 			continue
 		}
