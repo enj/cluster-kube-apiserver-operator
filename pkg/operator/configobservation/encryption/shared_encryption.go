@@ -285,7 +285,7 @@ func labelSelectorOrDie(label string) labels.Selector {
 	return componentSelector
 }
 
-func getRevision(podClient corev1client.PodInterface) (string, error) {
+func getAPIServerRevision(podClient corev1client.PodInterface) (string, error) {
 	// do a live list so we never get confused about what revision we are on
 	apiServerPods, err := podClient.List(metav1.ListOptions{LabelSelector: "apiserver=true"})
 	if err != nil {
@@ -294,14 +294,21 @@ func getRevision(podClient corev1client.PodInterface) (string, error) {
 
 	revisions := sets.NewString()
 	for _, apiServerPod := range apiServerPods.Items {
-		switch apiServerPod.Status.Phase {
-		case corev1.PodRunning:
+		switch phase := apiServerPod.Status.Phase; phase {
+		case corev1.PodRunning: // TODO check that total running == number of masters?
 			if !isPodReady(apiServerPod) {
 				return "", nil // pods are not fully ready
 			}
 			revisions.Insert(apiServerPod.Labels[revisionLabel])
-		case corev1.PodPending, corev1.PodUnknown:
+		case corev1.PodPending:
 			return "", nil // pods are not fully ready
+		case corev1.PodUnknown:
+			return "", fmt.Errorf("api server pod %s in unknown phase", apiServerPod.Name)
+		case corev1.PodSucceeded, corev1.PodFailed:
+			// old pods that we can safely ignore
+		default:
+			// do not error in case new phases get added
+			klog.Infof("api server pod %s has unexpected phase %v", apiServerPod.Name, phase)
 		}
 	}
 

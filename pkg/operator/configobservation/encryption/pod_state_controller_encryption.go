@@ -125,7 +125,7 @@ func (c *EncryptionPodStateController) sync() error {
 
 func (c *EncryptionPodStateController) handleEncryptionPodState() (error, bool) {
 	// we need a stable view of the world
-	revision, err := getRevision(c.podClient)
+	revision, err := getAPIServerRevision(c.podClient)
 	if err != nil || len(revision) == 0 {
 		return err, err == nil
 	}

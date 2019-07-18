@@ -133,7 +133,7 @@ func (c *EncryptionMigrationController) sync() error {
 
 func (c *EncryptionMigrationController) handleEncryptionMigration() (error, bool) {
 	// no storage migration during revision changes
-	revision, err := getRevision(c.podClient)
+	revision, err := getAPIServerRevision(c.podClient)
 	if err != nil || len(revision) == 0 {
 		return err, err == nil
 	}
