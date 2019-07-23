@@ -27,7 +27,7 @@ import (
 
 const migrationWorkKey = "key"
 
-type EncryptionMigrationController struct {
+type encryptionMigrationController struct {
 	operatorClient operatorv1helpers.StaticPodOperatorClient
 
 	queue         workqueue.RateLimitingInterface
@@ -49,7 +49,7 @@ type EncryptionMigrationController struct {
 	dynamicClient dynamic.Interface
 }
 
-func NewEncryptionMigrationController(
+func newEncryptionMigrationController(
 	targetNamespace string,
 	operatorClient operatorv1helpers.StaticPodOperatorClient,
 	kubeInformersForNamespaces operatorv1helpers.KubeInformersForNamespaces,
@@ -58,8 +58,8 @@ func NewEncryptionMigrationController(
 	eventRecorder events.Recorder,
 	validGRs map[schema.GroupResource]bool,
 	dynamicClient dynamic.Interface, // temporary hack
-) *EncryptionMigrationController {
-	c := &EncryptionMigrationController{
+) *encryptionMigrationController {
+	c := &encryptionMigrationController{
 		operatorClient: operatorClient,
 		eventRecorder:  eventRecorder.WithComponentSuffix("encryption-migration-controller"),
 
@@ -92,7 +92,7 @@ func NewEncryptionMigrationController(
 	return c
 }
 
-func (c *EncryptionMigrationController) sync() error {
+func (c *encryptionMigrationController) sync() error {
 	if ready, err := shouldRunEncryptionController(c.operatorClient); err != nil || !ready {
 		return err // we will get re-kicked when the operator status updates
 	}
@@ -131,7 +131,7 @@ func (c *EncryptionMigrationController) sync() error {
 	return configError
 }
 
-func (c *EncryptionMigrationController) handleEncryptionMigration() (error, bool) {
+func (c *encryptionMigrationController) handleEncryptionMigration() (error, bool) {
 	// no storage migration during revision changes
 	revision, err := getAPIServerRevision(c.podClient)
 	if err != nil || len(revision) == 0 {
@@ -179,7 +179,7 @@ func (c *EncryptionMigrationController) handleEncryptionMigration() (error, bool
 	return utilerrors.NewAggregate(errs), false
 }
 
-func (c *EncryptionMigrationController) runStorageMigration(gr schema.GroupResource) error {
+func (c *encryptionMigrationController) runStorageMigration(gr schema.GroupResource) error {
 	// TODO version hack
 	d := c.dynamicClient.Resource(gr.WithVersion("v1"))
 	allResource, err := d.List(metav1.ListOptions{})
@@ -194,7 +194,7 @@ func (c *EncryptionMigrationController) runStorageMigration(gr schema.GroupResou
 	return utilerrors.FilterOut(utilerrors.NewAggregate(errs), errors.IsNotFound, errors.IsConflict)
 }
 
-func (c *EncryptionMigrationController) Run(stopCh <-chan struct{}) {
+func (c *encryptionMigrationController) run(stopCh <-chan struct{}) {
 	defer utilruntime.HandleCrash()
 	defer c.queue.ShutDown()
 
@@ -211,12 +211,12 @@ func (c *EncryptionMigrationController) Run(stopCh <-chan struct{}) {
 	<-stopCh
 }
 
-func (c *EncryptionMigrationController) runWorker() {
+func (c *encryptionMigrationController) runWorker() {
 	for c.processNextWorkItem() {
 	}
 }
 
-func (c *EncryptionMigrationController) processNextWorkItem() bool {
+func (c *encryptionMigrationController) processNextWorkItem() bool {
 	dsKey, quit := c.queue.Get()
 	if quit {
 		return false
@@ -235,7 +235,7 @@ func (c *EncryptionMigrationController) processNextWorkItem() bool {
 	return true
 }
 
-func (c *EncryptionMigrationController) eventHandler() cache.ResourceEventHandler {
+func (c *encryptionMigrationController) eventHandler() cache.ResourceEventHandler {
 	return cache.ResourceEventHandlerFuncs{
 		AddFunc:    func(obj interface{}) { c.queue.Add(migrationWorkKey) },
 		UpdateFunc: func(old, new interface{}) { c.queue.Add(migrationWorkKey) },

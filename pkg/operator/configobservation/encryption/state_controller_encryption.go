@@ -27,7 +27,7 @@ import (
 
 const stateWorkKey = "key"
 
-type EncryptionStateController struct {
+type encryptionStateController struct {
 	operatorClient operatorv1helpers.StaticPodOperatorClient
 
 	queue         workqueue.RateLimitingInterface
@@ -48,7 +48,7 @@ type EncryptionStateController struct {
 	podClient corev1client.PodInterface
 }
 
-func NewEncryptionStateController(
+func newEncryptionStateController(
 	targetNamespace, destName string,
 	operatorClient operatorv1helpers.StaticPodOperatorClient,
 	kubeInformersForNamespaces operatorv1helpers.KubeInformersForNamespaces,
@@ -56,8 +56,8 @@ func NewEncryptionStateController(
 	podClient corev1client.PodsGetter,
 	eventRecorder events.Recorder,
 	validGRs map[schema.GroupResource]bool,
-) *EncryptionStateController {
-	c := &EncryptionStateController{
+) *encryptionStateController {
+	c := &encryptionStateController{
 		operatorClient: operatorClient,
 		eventRecorder:  eventRecorder.WithComponentSuffix("encryption-state-controller"),
 
@@ -90,7 +90,7 @@ func NewEncryptionStateController(
 	return c
 }
 
-func (c *EncryptionStateController) sync() error {
+func (c *encryptionStateController) sync() error {
 	if ready, err := shouldRunEncryptionController(c.operatorClient); err != nil || !ready {
 		return err // we will get re-kicked when the operator status updates
 	}
@@ -114,7 +114,7 @@ func (c *EncryptionStateController) sync() error {
 	return configError
 }
 
-func (c *EncryptionStateController) handleEncryptionStateConfig() error {
+func (c *encryptionStateController) handleEncryptionStateConfig() error {
 	// do not cause new revisions while old ones are rolling out
 	// TODO but does this even matter?
 	revision, err := getAPIServerRevision(c.podClient)
@@ -139,7 +139,7 @@ func (c *EncryptionStateController) handleEncryptionStateConfig() error {
 	return c.applyEncryptionConfigSecret(resourceConfigs)
 }
 
-func (c *EncryptionStateController) applyEncryptionConfigSecret(resourceConfigs []apiserverconfigv1.ResourceConfiguration) error {
+func (c *encryptionStateController) applyEncryptionConfigSecret(resourceConfigs []apiserverconfigv1.ResourceConfiguration) error {
 	encryptionConfig := &apiserverconfigv1.EncryptionConfiguration{Resources: resourceConfigs}
 	encryptionConfigBytes, err := runtime.Encode(encoder, encryptionConfig)
 	if err != nil {
@@ -156,7 +156,7 @@ func (c *EncryptionStateController) applyEncryptionConfigSecret(resourceConfigs 
 	return applyErr
 }
 
-func (c *EncryptionStateController) Run(stopCh <-chan struct{}) {
+func (c *encryptionStateController) run(stopCh <-chan struct{}) {
 	defer utilruntime.HandleCrash()
 	defer c.queue.ShutDown()
 
@@ -173,12 +173,12 @@ func (c *EncryptionStateController) Run(stopCh <-chan struct{}) {
 	<-stopCh
 }
 
-func (c *EncryptionStateController) runWorker() {
+func (c *encryptionStateController) runWorker() {
 	for c.processNextWorkItem() {
 	}
 }
 
-func (c *EncryptionStateController) processNextWorkItem() bool {
+func (c *encryptionStateController) processNextWorkItem() bool {
 	dsKey, quit := c.queue.Get()
 	if quit {
 		return false
@@ -197,7 +197,7 @@ func (c *EncryptionStateController) processNextWorkItem() bool {
 	return true
 }
 
-func (c *EncryptionStateController) eventHandler() cache.ResourceEventHandler {
+func (c *encryptionStateController) eventHandler() cache.ResourceEventHandler {
 	return cache.ResourceEventHandlerFuncs{
 		AddFunc:    func(obj interface{}) { c.queue.Add(stateWorkKey) },
 		UpdateFunc: func(old, new interface{}) { c.queue.Add(stateWorkKey) },

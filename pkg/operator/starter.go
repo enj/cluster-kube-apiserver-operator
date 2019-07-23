@@ -84,59 +84,18 @@ func RunOperator(ctx *controllercmd.ControllerContext) error {
 		ctx.EventRecorder,
 	)
 
-	validGRs := map[schema.GroupResource]bool{
-		schema.GroupResource{Group: "", Resource: "secrets"}:    true,
-		schema.GroupResource{Group: "", Resource: "configmaps"}: true,
-	}
-
-	encryptionKeyController := encryption.NewEncryptionKeyController(
-		operatorclient.TargetNamespace,
-		operatorClient,
-		kubeInformersForNamespaces,
-		kubeClient,
-		ctx.EventRecorder,
-		validGRs,
-	)
-
-	encryptionStateController := encryption.NewEncryptionStateController(
+	encryptionControllers := encryption.NewEncryptionControllers(
 		operatorclient.TargetNamespace,
 		"encryption-config-kube-apiserver",
 		operatorClient,
 		kubeInformersForNamespaces,
-		v1helpers.CachedSecretGetter(kubeClient.CoreV1(), kubeInformersForNamespaces),
-		kubeClient.CoreV1(),
-		ctx.EventRecorder,
-		validGRs,
-	)
-
-	encryptionPruneController := encryption.NewEncryptionPruneController(
-		operatorclient.TargetNamespace,
-		operatorClient,
-		kubeInformersForNamespaces,
 		kubeClient,
-		ctx.EventRecorder,
-		validGRs,
-	)
-
-	encryptionMigrationController := encryption.NewEncryptionMigrationController(
-		operatorclient.TargetNamespace,
-		operatorClient,
-		kubeInformersForNamespaces,
 		v1helpers.CachedSecretGetter(kubeClient.CoreV1(), kubeInformersForNamespaces),
 		kubeClient.CoreV1(),
 		ctx.EventRecorder,
-		validGRs,
 		dynamicClient,
-	)
-
-	encryptionPodStateController := encryption.NewEncryptionPodStateController(
-		operatorclient.TargetNamespace,
-		operatorClient,
-		kubeInformersForNamespaces,
-		v1helpers.CachedSecretGetter(kubeClient.CoreV1(), kubeInformersForNamespaces),
-		kubeClient.CoreV1(),
-		ctx.EventRecorder,
-		validGRs,
+		schema.GroupResource{Group: "", Resource: "secrets"},
+		schema.GroupResource{Group: "", Resource: "configmaps"},
 	)
 
 	targetConfigReconciler := targetconfigcontroller.NewTargetConfigController(
@@ -216,11 +175,7 @@ func RunOperator(ctx *controllercmd.ControllerContext) error {
 	go resourceSyncController.Run(1, ctx.Done())
 	go targetConfigReconciler.Run(1, ctx.Done())
 	go configObserver.Run(1, ctx.Done())
-	go encryptionKeyController.Run(ctx.Done())
-	go encryptionStateController.Run(ctx.Done())
-	go encryptionPruneController.Run(ctx.Done())
-	go encryptionMigrationController.Run(ctx.Done())
-	go encryptionPodStateController.Run(ctx.Done())
+	go encryptionControllers.Run(ctx.Done())
 	go clusterOperatorStatus.Run(1, ctx.Done())
 	go certRotationController.Run(1, ctx.Done())
 

@@ -25,7 +25,7 @@ import (
 
 const pruneWorkKey = "key"
 
-type EncryptionPruneController struct {
+type encryptionPruneController struct {
 	operatorClient operatorv1helpers.StaticPodOperatorClient
 
 	queue         workqueue.RateLimitingInterface
@@ -41,15 +41,15 @@ type EncryptionPruneController struct {
 	secretClient corev1client.SecretInterface
 }
 
-func NewEncryptionPruneController(
+func newEncryptionPruneController(
 	targetNamespace string,
 	operatorClient operatorv1helpers.StaticPodOperatorClient,
 	kubeInformersForNamespaces operatorv1helpers.KubeInformersForNamespaces,
 	kubeClient kubernetes.Interface,
 	eventRecorder events.Recorder,
 	validGRs map[schema.GroupResource]bool,
-) *EncryptionPruneController {
-	c := &EncryptionPruneController{
+) *encryptionPruneController {
+	c := &encryptionPruneController{
 		operatorClient: operatorClient,
 		eventRecorder:  eventRecorder.WithComponentSuffix("encryption-prune-controller"),
 
@@ -75,7 +75,7 @@ func NewEncryptionPruneController(
 	return c
 }
 
-func (c *EncryptionPruneController) sync() error {
+func (c *encryptionPruneController) sync() error {
 	if ready, err := shouldRunEncryptionController(c.operatorClient); err != nil || !ready {
 		return err // we will get re-kicked when the operator status updates
 	}
@@ -102,7 +102,7 @@ func (c *EncryptionPruneController) sync() error {
 	return configError
 }
 
-func (c *EncryptionPruneController) handleEncryptionPrune() error {
+func (c *encryptionPruneController) handleEncryptionPrune() error {
 	encryptionSecrets, err := c.secretLister.List(c.componentSelector)
 	if err != nil {
 		return err
@@ -124,7 +124,7 @@ func (c *EncryptionPruneController) handleEncryptionPrune() error {
 	return utilerrors.FilterOut(utilerrors.NewAggregate(deleteErrs), errors.IsNotFound)
 }
 
-func (c *EncryptionPruneController) Run(stopCh <-chan struct{}) {
+func (c *encryptionPruneController) run(stopCh <-chan struct{}) {
 	defer utilruntime.HandleCrash()
 	defer c.queue.ShutDown()
 
@@ -141,12 +141,12 @@ func (c *EncryptionPruneController) Run(stopCh <-chan struct{}) {
 	<-stopCh
 }
 
-func (c *EncryptionPruneController) runWorker() {
+func (c *encryptionPruneController) runWorker() {
 	for c.processNextWorkItem() {
 	}
 }
 
-func (c *EncryptionPruneController) processNextWorkItem() bool {
+func (c *encryptionPruneController) processNextWorkItem() bool {
 	dsKey, quit := c.queue.Get()
 	if quit {
 		return false
@@ -165,7 +165,7 @@ func (c *EncryptionPruneController) processNextWorkItem() bool {
 	return true
 }
 
-func (c *EncryptionPruneController) eventHandler() cache.ResourceEventHandler {
+func (c *encryptionPruneController) eventHandler() cache.ResourceEventHandler {
 	return cache.ResourceEventHandlerFuncs{
 		AddFunc:    func(obj interface{}) { c.queue.Add(pruneWorkKey) },
 		UpdateFunc: func(old, new interface{}) { c.queue.Add(pruneWorkKey) },

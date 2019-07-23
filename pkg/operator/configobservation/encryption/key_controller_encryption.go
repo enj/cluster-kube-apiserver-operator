@@ -28,7 +28,7 @@ import (
 
 const encWorkKey = "key"
 
-type EncryptionKeyController struct {
+type encryptionKeyController struct {
 	operatorClient operatorv1helpers.StaticPodOperatorClient
 
 	queue         workqueue.RateLimitingInterface
@@ -45,15 +45,15 @@ type EncryptionKeyController struct {
 	secretClient corev1client.SecretInterface
 }
 
-func NewEncryptionKeyController(
+func newEncryptionKeyController(
 	targetNamespace string,
 	operatorClient operatorv1helpers.StaticPodOperatorClient,
 	kubeInformersForNamespaces operatorv1helpers.KubeInformersForNamespaces,
 	kubeClient kubernetes.Interface,
 	eventRecorder events.Recorder,
 	validGRs map[schema.GroupResource]bool,
-) *EncryptionKeyController {
-	c := &EncryptionKeyController{
+) *encryptionKeyController {
+	c := &encryptionKeyController{
 		operatorClient: operatorClient,
 		eventRecorder:  eventRecorder.WithComponentSuffix("encryption-key-controller"), // TODO unused
 
@@ -81,7 +81,7 @@ func NewEncryptionKeyController(
 	return c
 }
 
-func (c *EncryptionKeyController) sync() error {
+func (c *encryptionKeyController) sync() error {
 	if ready, err := shouldRunEncryptionController(c.operatorClient); err != nil || !ready {
 		return err // we will get re-kicked when the operator status updates
 	}
@@ -105,7 +105,7 @@ func (c *EncryptionKeyController) sync() error {
 	return configError
 }
 
-func (c *EncryptionKeyController) handleEncryptionKey() error {
+func (c *encryptionKeyController) handleEncryptionKey() error {
 	encryptionSecrets, err := c.secretLister.List(c.componentSelector)
 	if err != nil {
 		return err
@@ -148,7 +148,7 @@ func (c *EncryptionKeyController) handleEncryptionKey() error {
 	return utilerrors.FilterOut(utilerrors.NewAggregate(errs), errors.IsNotFound)
 }
 
-func (c *EncryptionKeyController) generateKeySecret(gr schema.GroupResource, keyID uint64) *corev1.Secret {
+func (c *encryptionKeyController) generateKeySecret(gr schema.GroupResource, keyID uint64) *corev1.Secret {
 	return &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      fmt.Sprintf("encryption-%s-%s-%s-%d", c.componentName, gr.Group, gr.Resource, keyID),
@@ -196,7 +196,7 @@ func newAES256Key() []byte {
 	return b
 }
 
-func (c *EncryptionKeyController) Run(stopCh <-chan struct{}) {
+func (c *encryptionKeyController) run(stopCh <-chan struct{}) {
 	defer utilruntime.HandleCrash()
 	defer c.queue.ShutDown()
 
@@ -213,12 +213,12 @@ func (c *EncryptionKeyController) Run(stopCh <-chan struct{}) {
 	<-stopCh
 }
 
-func (c *EncryptionKeyController) runWorker() {
+func (c *encryptionKeyController) runWorker() {
 	for c.processNextWorkItem() {
 	}
 }
 
-func (c *EncryptionKeyController) processNextWorkItem() bool {
+func (c *encryptionKeyController) processNextWorkItem() bool {
 	dsKey, quit := c.queue.Get()
 	if quit {
 		return false
@@ -237,7 +237,7 @@ func (c *EncryptionKeyController) processNextWorkItem() bool {
 	return true
 }
 
-func (c *EncryptionKeyController) eventHandler() cache.ResourceEventHandler {
+func (c *encryptionKeyController) eventHandler() cache.ResourceEventHandler {
 	return cache.ResourceEventHandlerFuncs{
 		AddFunc:    func(obj interface{}) { c.queue.Add(encWorkKey) },
 		UpdateFunc: func(old, new interface{}) { c.queue.Add(encWorkKey) },

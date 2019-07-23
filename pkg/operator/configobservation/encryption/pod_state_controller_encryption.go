@@ -23,7 +23,7 @@ import (
 
 const podStateKey = "key"
 
-type EncryptionPodStateController struct {
+type encryptionPodStateController struct {
 	operatorClient operatorv1helpers.StaticPodOperatorClient
 
 	queue         workqueue.RateLimitingInterface
@@ -43,7 +43,7 @@ type EncryptionPodStateController struct {
 	podClient corev1client.PodInterface
 }
 
-func NewEncryptionPodStateController(
+func newEncryptionPodStateController(
 	targetNamespace string,
 	operatorClient operatorv1helpers.StaticPodOperatorClient,
 	kubeInformersForNamespaces operatorv1helpers.KubeInformersForNamespaces,
@@ -51,8 +51,8 @@ func NewEncryptionPodStateController(
 	podClient corev1client.PodsGetter,
 	eventRecorder events.Recorder,
 	validGRs map[schema.GroupResource]bool,
-) *EncryptionPodStateController {
-	c := &EncryptionPodStateController{
+) *encryptionPodStateController {
+	c := &encryptionPodStateController{
 		operatorClient: operatorClient,
 		eventRecorder:  eventRecorder.WithComponentSuffix("encryption-pod-state-controller"),
 
@@ -84,7 +84,7 @@ func NewEncryptionPodStateController(
 	return c
 }
 
-func (c *EncryptionPodStateController) sync() error {
+func (c *encryptionPodStateController) sync() error {
 	if ready, err := shouldRunEncryptionController(c.operatorClient); err != nil || !ready {
 		return err // we will get re-kicked when the operator status updates
 	}
@@ -123,7 +123,7 @@ func (c *EncryptionPodStateController) sync() error {
 	return configError
 }
 
-func (c *EncryptionPodStateController) handleEncryptionPodState() (error, bool) {
+func (c *encryptionPodStateController) handleEncryptionPodState() (error, bool) {
 	// we need a stable view of the world
 	revision, err := getAPIServerRevision(c.podClient)
 	if err != nil || len(revision) == 0 {
@@ -172,7 +172,7 @@ func (c *EncryptionPodStateController) handleEncryptionPodState() (error, bool) 
 	return utilerrors.NewAggregate(errs), false
 }
 
-func (c *EncryptionPodStateController) Run(stopCh <-chan struct{}) {
+func (c *encryptionPodStateController) run(stopCh <-chan struct{}) {
 	defer utilruntime.HandleCrash()
 	defer c.queue.ShutDown()
 
@@ -189,12 +189,12 @@ func (c *EncryptionPodStateController) Run(stopCh <-chan struct{}) {
 	<-stopCh
 }
 
-func (c *EncryptionPodStateController) runWorker() {
+func (c *encryptionPodStateController) runWorker() {
 	for c.processNextWorkItem() {
 	}
 }
 
-func (c *EncryptionPodStateController) processNextWorkItem() bool {
+func (c *encryptionPodStateController) processNextWorkItem() bool {
 	dsKey, quit := c.queue.Get()
 	if quit {
 		return false
@@ -213,7 +213,7 @@ func (c *EncryptionPodStateController) processNextWorkItem() bool {
 	return true
 }
 
-func (c *EncryptionPodStateController) eventHandler() cache.ResourceEventHandler {
+func (c *encryptionPodStateController) eventHandler() cache.ResourceEventHandler {
 	return cache.ResourceEventHandlerFuncs{
 		AddFunc:    func(obj interface{}) { c.queue.Add(podStateKey) },
 		UpdateFunc: func(old, new interface{}) { c.queue.Add(podStateKey) },
