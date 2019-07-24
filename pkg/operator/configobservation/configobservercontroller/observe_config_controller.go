@@ -15,11 +15,11 @@ import (
 	"github.com/openshift/cluster-kube-apiserver-operator/pkg/operator/configobservation"
 	"github.com/openshift/cluster-kube-apiserver-operator/pkg/operator/configobservation/apiserver"
 	"github.com/openshift/cluster-kube-apiserver-operator/pkg/operator/configobservation/auth"
-	"github.com/openshift/cluster-kube-apiserver-operator/pkg/operator/configobservation/encryption"
 	"github.com/openshift/cluster-kube-apiserver-operator/pkg/operator/configobservation/etcd"
 	"github.com/openshift/cluster-kube-apiserver-operator/pkg/operator/configobservation/images"
 	"github.com/openshift/cluster-kube-apiserver-operator/pkg/operator/configobservation/network"
 	"github.com/openshift/cluster-kube-apiserver-operator/pkg/operator/configobservation/scheduler"
+	"github.com/openshift/cluster-kube-apiserver-operator/pkg/operator/encryption"
 	"github.com/openshift/cluster-kube-apiserver-operator/pkg/operator/operatorclient"
 )
 

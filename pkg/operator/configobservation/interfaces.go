@@ -5,7 +5,7 @@ import (
 	"k8s.io/client-go/tools/cache"
 
 	configlistersv1 "github.com/openshift/client-go/config/listers/config/v1"
-	"github.com/openshift/cluster-kube-apiserver-operator/pkg/operator/configobservation/encryption"
+	"github.com/openshift/cluster-kube-apiserver-operator/pkg/operator/encryption"
 	"github.com/openshift/library-go/pkg/operator/configobserver/cloudprovider"
 	"github.com/openshift/library-go/pkg/operator/resourcesynccontroller"
 )
