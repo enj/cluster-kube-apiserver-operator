@@ -93,6 +93,7 @@ func RunOperator(ctx *controllercmd.ControllerContext) error {
 		v1helpers.CachedSecretGetter(kubeClient.CoreV1(), kubeInformersForNamespaces),
 		kubeClient.CoreV1(),
 		ctx.EventRecorder,
+		resourceSyncController,
 		dynamicClient,
 		schema.GroupResource{Group: "", Resource: "secrets"},
 		schema.GroupResource{Group: "", Resource: "configmaps"},

@@ -7,6 +7,7 @@ import (
 	corev1client "k8s.io/client-go/kubernetes/typed/core/v1"
 
 	"github.com/openshift/library-go/pkg/operator/events"
+	"github.com/openshift/library-go/pkg/operator/resourcesynccontroller"
 	operatorv1helpers "github.com/openshift/library-go/pkg/operator/v1helpers"
 )
 
@@ -22,9 +23,12 @@ func NewEncryptionControllers(
 	secretClient corev1client.SecretsGetter,
 	podClient corev1client.PodsGetter,
 	eventRecorder events.Recorder,
+	resourceSyncer resourcesynccontroller.ResourceSyncer,
 	dynamicClient dynamic.Interface, // temporary hack for in-process storage migration
 	groupResources ...schema.GroupResource,
 ) *EncryptionControllers {
+	syncEncryptionConfig(resourceSyncer, targetNamespace, destName)
+
 	validGRs := map[schema.GroupResource]bool{}
 	for _, gr := range groupResources {
 		validGRs[gr] = true

@@ -5,7 +5,7 @@ import (
 	"github.com/openshift/library-go/pkg/operator/resourcesynccontroller"
 )
 
-func SyncEncryptionConfig(syncer resourcesynccontroller.ResourceSyncer, targetNamespace, sourceName string) {
+func syncEncryptionConfig(syncer resourcesynccontroller.ResourceSyncer, targetNamespace, sourceName string) {
 	if err := syncer.SyncSecret(
 		resourcesynccontroller.ResourceLocation{Namespace: targetNamespace, Name: encryptionConfSecret},
 		resourcesynccontroller.ResourceLocation{Namespace: operatorclient.GlobalMachineSpecifiedConfigNamespace, Name: sourceName},

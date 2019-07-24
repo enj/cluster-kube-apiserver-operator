@@ -120,7 +120,5 @@ func NewConfigObserver(
 	configInformer.Config().V1().Networks().Informer().AddEventHandler(c.EventHandler())
 	configInformer.Config().V1().Schedulers().Informer().AddEventHandler(c.EventHandler())
 
-	encryption.SyncEncryptionConfig(resourceSyncer, operatorclient.TargetNamespace, "encryption-config-kube-apiserver")
-
 	return c
 }
