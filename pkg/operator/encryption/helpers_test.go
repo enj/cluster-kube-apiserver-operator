@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -14,9 +16,11 @@ import (
 )
 
 const (
-	encryptionSecretKeyDataForTest       = "encryption.operator.openshift.io-key"
-	encryptionConfSecretForTest          = "encryption-config"
-	encryptionSecretReadTimestampForTest = "encryption.operator.openshift.io/read-timestamp"
+	encryptionSecretKeyDataForTest           = "encryption.operator.openshift.io-key"
+	encryptionConfSecretForTest              = "encryption-config"
+	encryptionSecretReadTimestampForTest     = "encryption.operator.openshift.io/read-timestamp"
+	encryptionSecretWriteTimestampForTest    = "encryption.operator.openshift.io/write-timestamp"
+	encryptionSecretMigratedTimestampForTest = "encryption.operator.openshift.io/migrated-timestamp"
 )
 
 func createEncryptionKeySecretNoData(targetNS string, gr schema.GroupResource, keyID uint64) *corev1.Secret {
@@ -27,8 +31,9 @@ func createEncryptionKeySecretNoData(targetNS string, gr schema.GroupResource, k
 
 	return &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      fmt.Sprintf("%s-%s-%s-encryption-%d", targetNS, group, gr.Resource, keyID),
-			Namespace: "openshift-config-managed",
+			Name:        fmt.Sprintf("%s-%s-%s-encryption-%d", targetNS, group, gr.Resource, keyID),
+			Namespace:   "openshift-config-managed",
+			Annotations: map[string]string{},
 			Labels: map[string]string{
 				"encryption.operator.openshift.io/component": targetNS,
 				"encryption.operator.openshift.io/group":     gr.Group,
@@ -51,6 +56,46 @@ func createEncryptionKeySecretWithKeyFromExistingSecret(targetNS string, gr sche
 		secret.Data[encryptionSecretKeyDataForTest] = rawKey
 	}
 	return secret
+}
+
+func createReadEncryptionKeySecretWithRawKey(targetNS string, gr schema.GroupResource, keyID uint64, rawKey []byte, timestamp ...string) *corev1.Secret {
+	secret := createEncryptionKeySecretWithRawKey(targetNS, gr, keyID, rawKey)
+	formattedTS := ""
+	if len(timestamp) == 0 {
+		formattedTS = time.Now().Format(time.RFC3339)
+	} else {
+		formattedTS = timestamp[0]
+	}
+	secret.Annotations[encryptionSecretReadTimestampForTest] = formattedTS
+	return secret
+}
+
+func createWriteEncryptionKeySecretWithRawKey(targetNS string, gr schema.GroupResource, keyID uint64, rawKey []byte, timestamp ...string) *corev1.Secret {
+	secret := createReadEncryptionKeySecretWithRawKey(targetNS, gr, keyID, rawKey, timestamp...)
+	formattedTS := ""
+	if len(timestamp) == 0 {
+		formattedTS = time.Now().Format(time.RFC3339)
+	} else {
+		formattedTS = timestamp[0]
+	}
+	secret.Annotations[encryptionSecretWriteTimestampForTest] = formattedTS
+	return secret
+}
+
+func createMigratedEncryptionKeySecretWithRawKey(targetNS string, gr schema.GroupResource, keyID uint64, rawKey []byte, timestamp ...string) *corev1.Secret {
+	secret := createWriteEncryptionKeySecretWithRawKey(targetNS, gr, keyID, rawKey, timestamp...)
+	formattedTS := ""
+	if len(timestamp) == 0 {
+		formattedTS = time.Now().Format(time.RFC3339)
+	} else {
+		formattedTS = timestamp[0]
+	}
+	secret.Annotations[encryptionSecretMigratedTimestampForTest] = formattedTS
+	return secret
+}
+
+func createExpiredMigratedEncryptionKeySecretWithRawKey(targetNS string, gr schema.GroupResource, keyID uint64, rawKey []byte) *corev1.Secret {
+	return createMigratedEncryptionKeySecretWithRawKey(targetNS, gr, keyID, rawKey, time.Now().Add(time.Minute*35*-1).Format(time.RFC3339))
 }
 
 func createDummyKubeAPIPod(name, namespace string) *corev1.Pod {
@@ -148,4 +193,58 @@ func createEncryptionCfgNoWriteKey(keyID string, keyBase64 string, resources ...
 			},
 		},
 	}
+}
+
+func createEncryptionCfgWithWriteKey(keysResources []encryptionKeysResourceTuple) *apiserverconfigv1.EncryptionConfiguration {
+
+	configurations := []apiserverconfigv1.ResourceConfiguration{}
+	for _, keysResource := range keysResources {
+		configurations = append(configurations, apiserverconfigv1.ResourceConfiguration{
+			Resources: []string{keysResource.resource},
+			Providers: []apiserverconfigv1.ProviderConfiguration{
+				apiserverconfigv1.ProviderConfiguration{
+					AESCBC: &apiserverconfigv1.AESConfiguration{
+						Keys: keysResource.keys,
+					},
+				},
+				apiserverconfigv1.ProviderConfiguration{
+					Identity: &apiserverconfigv1.IdentityConfiguration{},
+				},
+			},
+		})
+
+	}
+
+	return &apiserverconfigv1.EncryptionConfiguration{
+		TypeMeta: metav1.TypeMeta{
+			Kind:       "EncryptionConfiguration",
+			APIVersion: "apiserver.config.k8s.io/v1",
+		},
+		Resources: configurations,
+	}
+}
+
+func createEncryptionCfgSecretWithWriteKeys(t *testing.T, targetNs string, revision string, keysResources []encryptionKeysResourceTuple) *corev1.Secret {
+	t.Helper()
+
+	encryptionCfg := createEncryptionCfgWithWriteKey(keysResources)
+	rawEncryptionCfg, err := runtime.Encode(encoder, encryptionCfg)
+	if err != nil {
+		t.Fatalf("unable to encode the encryption config, err = %v", err)
+	}
+
+	return &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      fmt.Sprintf("%s-%s", encryptionConfSecretForTest, revision),
+			Namespace: targetNs,
+		},
+		Data: map[string][]byte{
+			encryptionConfSecretForTest: rawEncryptionCfg,
+		},
+	}
+}
+
+type encryptionKeysResourceTuple struct {
+	resource string
+	keys     []apiserverconfigv1.Key
 }
