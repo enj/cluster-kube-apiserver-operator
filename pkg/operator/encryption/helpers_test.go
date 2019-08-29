@@ -21,6 +21,7 @@ const (
 	encryptionSecretReadTimestampForTest     = "encryption.operator.openshift.io/read-timestamp"
 	encryptionSecretWriteTimestampForTest    = "encryption.operator.openshift.io/write-timestamp"
 	encryptionSecretMigratedTimestampForTest = "encryption.operator.openshift.io/migrated-timestamp"
+	encryptionSecretComponentForTest         = "encryption.operator.openshift.io/component"
 )
 
 func createEncryptionKeySecretNoData(targetNS string, gr schema.GroupResource, keyID uint64) *corev1.Secret {
@@ -35,9 +36,9 @@ func createEncryptionKeySecretNoData(targetNS string, gr schema.GroupResource, k
 			Namespace:   "openshift-config-managed",
 			Annotations: map[string]string{},
 			Labels: map[string]string{
-				"encryption.operator.openshift.io/component": targetNS,
-				"encryption.operator.openshift.io/group":     gr.Group,
-				"encryption.operator.openshift.io/resource":  gr.Resource,
+				encryptionSecretComponentForTest:            targetNS,
+				"encryption.operator.openshift.io/group":    gr.Group,
+				"encryption.operator.openshift.io/resource": gr.Resource,
 			},
 		},
 		Data: map[string][]byte{},

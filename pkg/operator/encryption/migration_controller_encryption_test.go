@@ -110,6 +110,14 @@ func TestEncryptionMigrationController(t *testing.T) {
 					ec.APIVersion = corev1.SchemeGroupVersion.String()
 					return ec
 				}(),
+				func() *corev1.Secret {
+					s := &corev1.Secret{}
+					s.Name = "s-in-abc"
+					s.Namespace = "abc-ns"
+					s.Kind = "Secret"
+					s.APIVersion = corev1.SchemeGroupVersion.String()
+					return s
+				}(),
 			},
 			expectedActions: []string{"list:pods:kms", "get:secrets:kms", "list:secrets:openshift-config-managed", "get:secrets:openshift-config-managed", "update:secrets:openshift-config-managed", "create:events:kms", "get:secrets:openshift-config-managed", "update:secrets:openshift-config-managed", "create:events:kms"},
 			validateFunc: func(ts *testing.T, actionsKube []clientgotesting.Action, actionsDynamic []clientgotesting.Action, initialSecrets []*corev1.Secret, targetGRs map[schema.GroupResource]bool, unstructuredObjs []runtime.Object) {
@@ -238,7 +246,6 @@ func validateMigratedResources(ts *testing.T, actions []clientgotesting.Action, 
 			for _, action := range actions {
 				if action.Matches("list", gr.Resource) {
 					validatedListRequests++
-					break
 				}
 			}
 		}
@@ -261,7 +268,6 @@ func validateMigratedResources(ts *testing.T, actions []clientgotesting.Action, 
 				}
 				if equality.Semantic.DeepEqual(updatedObj, expectedUnstructuredObj) {
 					unstructuredObjValidated = true
-					break
 				}
 			}
 
@@ -273,6 +279,7 @@ func validateMigratedResources(ts *testing.T, actions []clientgotesting.Action, 
 }
 
 func validateSecretsWereAnnotated(ts *testing.T, actions []clientgotesting.Action, expectedSecrets []*corev1.Secret) {
+	ts.Helper()
 	validatedSecrets := 0
 	for _, action := range actions {
 		if action.Matches("update", "secrets") {
@@ -286,9 +293,8 @@ func validateSecretsWereAnnotated(ts *testing.T, actions []clientgotesting.Actio
 				}
 				expectedSecret.Annotations[encryptionSecretMigratedTimestampForTest] = actualSecret.Annotations[encryptionSecretMigratedTimestampForTest]
 
-				if !equality.Semantic.DeepEqual(actualSecret, expectedSecret) {
+				if equality.Semantic.DeepEqual(actualSecret, expectedSecret) {
 					validatedSecrets++
-					break
 				}
 			}
 		}
